@@ -38,8 +38,7 @@ If a change does **not** require an update, state this explicitly in the PR desc
 Before merge, the OCR worker must:
 
 - Connect successfully to PostgreSQL
-- Select sessions in `state = processing`
-- Download images from Cloudflare R2
+- Claim sessions safely with transactional locking
 - Transition sessions to `done` or `failed`
 - Never modify sessions outside its responsibility
 
@@ -129,14 +128,14 @@ PostgreSQL is the **only integration boundary**.
 
 ```
 
-open → closed → processing → done | failed
+pending → processing → done | failed
 
 ```
 
 Rules:
-- You will only see sessions in `processing`
-- A `processing` session is frozen and exclusive
-- Each session must be processed **exactly once**
+- Workers claim with `FOR UPDATE SKIP LOCKED`
+- `processing` rows may be reclaimed only when lease is stale
+- Each session must be finalized exactly once
 
 ---
 
@@ -172,15 +171,17 @@ If the date cannot be resolved or is inconsistent:
 
 - C# backend complete
 - Sessions grouped and claimed atomically
-- Dispatcher transitions `closed → processing`
-- Phase 2 session-finalization stub implemented in Python (`main.py`)
+- Dispatcher transitions session into worker-claimable queue state
+- Phase 2 session-finalization stub implemented with DB lease claim (`main.py`)
 - Current worker behavior:
-  - selects at most one `capture_session` row where `state = processing` per run
+  - claims at most one session per run with `FOR UPDATE SKIP LOCKED`
+  - claim policy: `pending` first, stale `processing` lease reclaim
+  - sets lease fields (`locked_at`, `locked_by`) on claim
   - inserts one deterministic stub `schedule_version` payload (`{"stub": true}`)
   - uses fixed hardcoded `schedule_date` and fixed `version = 1` (Phase 2 stub behavior)
   - computes deterministic `payload_hash`
-  - transitions session `processing → done` on success
-  - transitions session `processing → failed` with error on failure
+  - transitions `processing → done` on success and clears lease fields
+  - transitions `processing → failed` with error on failure and clears lease fields
 - OCR extraction, image download, and schedule parsing are not implemented in Phase 2
 
 ---

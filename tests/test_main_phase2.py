@@ -7,7 +7,7 @@ import main as worker
 
 class InsertStubScheduleVersionTests(unittest.TestCase):
     def setUp(self) -> None:
-        self.session = worker.ProcessingSession(id="session-1", user_id=8225717176)
+        self.session = worker.ClaimedSession(id="session-1", user_id=8225717176)
 
     def test_insert_stub_schedule_version_success_executes_insert(self) -> None:
         conn = MagicMock()

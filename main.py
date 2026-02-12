@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Phase 2 session finalization stub: write one schedule version and close one session."""
+"""Session finalization worker with transactional lease claim and skip-locked concurrency safety."""
 
 from __future__ import annotations
 
@@ -8,6 +8,7 @@ import json
 import logging
 import os
 import sys
+import time
 from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Any
@@ -73,10 +74,17 @@ class JsonFormatter(logging.Formatter):
 class WorkerConfig:
     database_url: str
     db_schema: str
+    worker_id: str
+    pending_state: str
+    processing_state: str
+    done_state: str
+    failed_state: str
+    lease_timeout_seconds: int
+    simulated_work_seconds: float
 
 
 @dataclass(frozen=True)
-class ProcessingSession:
+class ClaimedSession:
     id: str
     user_id: int
 
@@ -106,6 +114,32 @@ def getenv_first(*names: str) -> str | None:
     return None
 
 
+def parse_int_env(name: str, default: int) -> int:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    try:
+        parsed = int(value)
+    except ValueError as exc:
+        raise RuntimeError(f"Invalid integer for {name}: {value}") from exc
+    if parsed <= 0:
+        raise RuntimeError(f"{name} must be > 0.")
+    return parsed
+
+
+def parse_float_env(name: str, default: float) -> float:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    try:
+        parsed = float(value)
+    except ValueError as exc:
+        raise RuntimeError(f"Invalid float for {name}: {value}") from exc
+    if parsed < 0:
+        raise RuntimeError(f"{name} must be >= 0.")
+    return parsed
+
+
 def load_config() -> WorkerConfig:
     database_url = getenv_first("DATABASE_URL", "POSTGRES_DSN", "TEST_DATABASE_URL")
     if not database_url:
@@ -114,6 +148,13 @@ def load_config() -> WorkerConfig:
     return WorkerConfig(
         database_url=database_url,
         db_schema=os.getenv("DB_SCHEMA", "schedule_ingest"),
+        worker_id=os.getenv("WORKER_ID", f"worker-{os.getpid()}"),
+        pending_state=os.getenv("PENDING_STATE", "pending"),
+        processing_state=os.getenv("PROCESSING_STATE", "processing"),
+        done_state=os.getenv("DONE_STATE", "done"),
+        failed_state=os.getenv("FAILED_STATE", "failed"),
+        lease_timeout_seconds=parse_int_env("LEASE_TIMEOUT_SECONDS", 300),
+        simulated_work_seconds=parse_float_env("SIMULATED_WORK_SECONDS", 0.0),
     )
 
 
@@ -122,31 +163,61 @@ def make_payload_hash(payload: dict[str, Any]) -> str:
     return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
 
 
-def fetch_one_processing_session(conn: psycopg.Connection, schema: str) -> ProcessingSession | None:
+def claim_one_session(conn: psycopg.Connection, config: WorkerConfig) -> ClaimedSession | None:
     query = sql.SQL(
         """
-        SELECT id::text AS id, user_id
-        FROM {}.capture_session
-        WHERE state = 'processing'
-        ORDER BY created_at
-        LIMIT 1
+        WITH candidate AS (
+            SELECT id
+            FROM {}.capture_session
+            WHERE state::text = {}
+               OR (
+                    state::text = {}
+                    AND (
+                        locked_at IS NULL
+                        OR locked_at < NOW() - make_interval(secs => %s)
+                    )
+               )
+            ORDER BY created_at
+            FOR UPDATE SKIP LOCKED
+            LIMIT 1
+        )
+        UPDATE {}.capture_session AS cs
+        SET state = {},
+            locked_at = NOW(),
+            locked_by = %s,
+            error = NULL
+        FROM candidate
+        WHERE cs.id = candidate.id
+        RETURNING cs.id::text AS id, cs.user_id
         """
-    ).format(sql.Identifier(schema))
+    ).format(
+        sql.Identifier(config.db_schema),
+        sql.Literal(config.pending_state),
+        sql.Literal(config.processing_state),
+        sql.Identifier(config.db_schema),
+        sql.Literal(config.processing_state),
+    )
 
     with conn.cursor(row_factory=dict_row) as cur:
-        cur.execute(query)
+        cur.execute(
+            query,
+            (
+                config.lease_timeout_seconds,
+                config.worker_id,
+            ),
+        )
         row = cur.fetchone()
 
     if row is None:
         return None
-    return ProcessingSession(id=row["id"], user_id=row["user_id"])
+    return ClaimedSession(id=row["id"], user_id=row["user_id"])
 
 
 def insert_stub_schedule_version(
     conn: psycopg.Connection,
     schema: str,
     *,
-    session: ProcessingSession,
+    session: ClaimedSession,
     schedule_date: date,
     version: int,
     payload: dict[str, Any] | None,
@@ -184,14 +255,21 @@ def insert_stub_schedule_version(
         )
 
 
-def mark_session_done(conn: psycopg.Connection, schema: str, session_id: str) -> None:
+def mark_session_done(conn: psycopg.Connection, config: WorkerConfig, session_id: str) -> None:
     query = sql.SQL(
         """
         UPDATE {}.capture_session
-        SET state = 'done', error = NULL
-        WHERE id = %s AND state = 'processing'
+        SET state = {},
+            error = NULL,
+            locked_at = NULL,
+            locked_by = NULL
+        WHERE id = %s AND state::text = {}
         """
-    ).format(sql.Identifier(schema))
+    ).format(
+        sql.Identifier(config.db_schema),
+        sql.Literal(config.done_state),
+        sql.Literal(config.processing_state),
+    )
 
     with conn.cursor() as cur:
         cur.execute(query, (session_id,))
@@ -199,17 +277,31 @@ def mark_session_done(conn: psycopg.Connection, schema: str, session_id: str) ->
             raise RuntimeError(f"Expected one session transition to done, got {cur.rowcount}.")
 
 
-def mark_session_failed(conn: psycopg.Connection, schema: str, session_id: str, error_text: str) -> None:
+def mark_session_failed(
+    conn: psycopg.Connection,
+    config: WorkerConfig,
+    session_id: str,
+    error_text: str,
+) -> None:
     query = sql.SQL(
         """
         UPDATE {}.capture_session
-        SET state = 'failed', error = %s
-        WHERE id = %s AND state = 'processing'
+        SET state = {},
+            error = %s,
+            locked_at = NULL,
+            locked_by = NULL
+        WHERE id = %s AND state::text = {}
         """
-    ).format(sql.Identifier(schema))
+    ).format(
+        sql.Identifier(config.db_schema),
+        sql.Literal(config.failed_state),
+        sql.Literal(config.processing_state),
+    )
 
     with conn.cursor() as cur:
         cur.execute(query, (error_text, session_id))
+        if cur.rowcount != 1:
+            raise RuntimeError(f"Expected one session transition to failed, got {cur.rowcount}.")
 
 
 def truncate_error(message: str, limit: int = 4000) -> str:
@@ -218,13 +310,15 @@ def truncate_error(message: str, limit: int = 4000) -> str:
     return message[: limit - 3] + "..."
 
 
-def process_one_session(
+def perform_stub_work(
     *,
     conn: psycopg.Connection,
     config: WorkerConfig,
-    session: ProcessingSession,
-    logger: logging.Logger,
-) -> None:
+    session: ClaimedSession,
+) -> str:
+    if config.simulated_work_seconds > 0:
+        time.sleep(config.simulated_work_seconds)
+
     payload_hash = make_payload_hash(DUMMY_PAYLOAD)
 
     insert_stub_schedule_version(
@@ -237,57 +331,62 @@ def process_one_session(
         payload_hash=payload_hash,
     )
 
-    mark_session_done(conn, config.db_schema, session.id)
-
-    logger.info(
-        "Session finalized",
-        extra={
-            "event": "session.done",
-            "session_id": session.id,
-            "user_id": session.user_id,
-            "schedule_date": STUB_SCHEDULE_DATE.isoformat(),
-            "version": STUB_VERSION,
-            "payload_hash": payload_hash,
-        },
-    )
+    return payload_hash
 
 
 def run_once(config: WorkerConfig, logger: logging.Logger) -> int:
     with psycopg.connect(config.database_url) as conn:
-        session = fetch_one_processing_session(conn, config.db_schema)
+        with conn.transaction():
+            session = claim_one_session(conn, config)
+            if session is None:
+                logger.info(
+                    "No claimable session found",
+                    extra={"event": "worker.no_session"},
+                )
+                return 0
 
-        if session is None:
             logger.info(
-                "No processing session found",
-                extra={"event": "worker.no_session"},
-            )
-            return 0
-
-        logger.info(
-            "Picked processing session",
-            extra={"event": "session.start", "session_id": session.id, "user_id": session.user_id},
-        )
-
-        try:
-            with conn.transaction():
-                process_one_session(conn=conn, config=config, session=session, logger=logger)
-            return 1
-        except Exception as exc:
-            error_text = truncate_error(str(exc))
-
-            logger.error(
-                "Session finalization failed",
+                "Claimed session",
                 extra={
-                    "event": "session.failed",
+                    "event": "session.claimed",
                     "session_id": session.id,
                     "user_id": session.user_id,
-                    "error": error_text,
+                    "worker_id": config.worker_id,
                 },
             )
 
-            with conn.transaction():
-                mark_session_failed(conn, config.db_schema, session.id, error_text)
-            return 0
+            try:
+                with conn.transaction():
+                    payload_hash = perform_stub_work(conn=conn, config=config, session=session)
+                    mark_session_done(conn, config, session.id)
+            except Exception as exc:
+                error_text = truncate_error(str(exc))
+                mark_session_failed(conn, config, session.id, error_text)
+                logger.error(
+                    "Session finalization failed",
+                    extra={
+                        "event": "session.failed",
+                        "session_id": session.id,
+                        "user_id": session.user_id,
+                        "worker_id": config.worker_id,
+                        "error": error_text,
+                    },
+                )
+                return 0
+
+            logger.info(
+                "Session finalized",
+                extra={
+                    "event": "session.done",
+                    "session_id": session.id,
+                    "user_id": session.user_id,
+                    "worker_id": config.worker_id,
+                    "schedule_date": STUB_SCHEDULE_DATE.isoformat(),
+                    "version": STUB_VERSION,
+                    "payload_hash": payload_hash,
+                },
+            )
+            return 1
 
 
 def main() -> int:
@@ -308,19 +407,25 @@ def main() -> int:
         extra={
             "event": "worker.start",
             "db_schema": config.db_schema,
-            "mode": "phase2_stub_finalization",
+            "mode": "phase2_lease_claim",
+            "worker_id": config.worker_id,
+            "lease_timeout_seconds": config.lease_timeout_seconds,
         },
     )
 
     try:
         processed = run_once(config, logger)
     except Exception:
-        logger.exception("Worker crashed", extra={"event": "worker.crash"})
+        logger.exception("Worker crashed", extra={"event": "worker.crash", "worker_id": config.worker_id})
         return 1
 
     logger.info(
         "Worker finished",
-        extra={"event": "worker.finish", "processed_sessions": processed},
+        extra={
+            "event": "worker.finish",
+            "processed_sessions": processed,
+            "worker_id": config.worker_id,
+        },
     )
     return 0
 

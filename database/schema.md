@@ -12,17 +12,16 @@ This document describes the `schedule_ingest` PostgreSQL schema contract used by
 
 Allowed values:
 
-- `open`
-- `closed`
+- `pending`
 - `processing`
 - `done`
 - `failed`
 
 Lifecycle:
 
-- `open -> closed | failed`
-- `closed -> processing | failed`
+- `pending -> processing | failed`
 - `processing -> done | failed`
+- `processing -> processing` (only when stale lease is reclaimed)
 
 ## Table: `capture_session`
 
@@ -34,14 +33,19 @@ Columns:
 - `user_id` bigint NOT NULL
 - `state` capture_session_state NOT NULL
 - `created_at` timestamptz NOT NULL
-- `closed_at` timestamptz NULL
 - `error` text NULL
+- `locked_at` timestamptz NULL
+- `locked_by` text NULL
 
 Rules:
 
-- `closed_at` is NULL only when state is `open`
 - `error` is populated only when state is `failed`
-- Worker may transition only from `processing` to `done` or `failed`
+- worker claims with transactional lease:
+  - claim `pending`, or stale `processing`
+  - on claim set `state=processing`, `locked_at=now()`, `locked_by=<worker>`
+- worker finalization:
+  - success: `state=done`, clear lease fields
+  - failure: `state=failed`, set `error`, clear lease fields
 
 ## Table: `capture_image`
 
@@ -97,7 +101,7 @@ Rules:
 
 ## Worker Responsibilities (Current Phase)
 
-- Read session(s) in `state = 'processing'`
+- Claim one session with `FOR UPDATE SKIP LOCKED` and lease rules
 - Insert one `schedule_version` stub payload
 - Mark session `done` on success
 - Mark session `failed` with `error` on failure
