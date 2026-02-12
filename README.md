@@ -1,16 +1,16 @@
-# OCR Worker (Phase 2 Session Finalization Stub)
+# OCR Worker (Phase 3 Fixture Payload)
 
-Phase 2 validates DB finalization + claim concurrency correctness:
+Phase 3 validates deterministic payload/version mechanics before OCR:
 
 - PostgreSQL connectivity
-- claims at most one session per run using `FOR UPDATE SKIP LOCKED`
+- at-most-one session claim per run using `FOR UPDATE SKIP LOCKED`
 - lease semantics:
   - prefers `state = 'pending'`
   - reclaims stale `state = 'processing'` when lease is expired
-- stub `schedule_version` insert with payload `{"stub": true}`
-- fixed `schedule_date` (hardcoded) and fixed `version = 1`
-- deterministic payload hash
-- ownership-guarded finalization (`locked_by` must match claimer)
+- fixture-driven payload write from local JSON (`fixtures/sample_schedule.json`)
+- deterministic payload hash from normalized JSON
+- per-date version progression (`current_version + 1`, else `1`)
+- ownership-guarded insert/finalization (`locked_by` must match claimer)
 - session transition: `processing -> done | failed`, clearing lease fields
 
 No OCR, image download, or parsing is performed in this phase.
@@ -34,6 +34,7 @@ psql "$DATABASE_URL" -f database/migrations/20260212_add_session_leases.sql
 Optional:
 
 - `DB_SCHEMA` (default: `schedule_ingest`)
+- `FIXTURE_PAYLOAD_PATH` (default: `fixtures/sample_schedule.json`)
 - `WORKER_ID` (default: `worker-<pid>`)
 - `LEASE_TIMEOUT_SECONDS` (default: `300`)
 - `LEASE_HEARTBEAT_SECONDS` (default: `10`)
@@ -43,6 +44,24 @@ Optional:
 - `PROCESSING_STATE` (default: `processing`)
 - `DONE_STATE` (default: `done`)
 - `FAILED_STATE` (default: `failed`)
+
+## Fixture Payload Contract
+
+Fixture payload must be a JSON object and include:
+
+- `schedule_date`: ISO date string (`YYYY-MM-DD`)
+- any additional deterministic fields (for now, sample uses `entries`)
+
+Example:
+
+```json
+{
+  "schedule_date": "2026-02-10",
+  "entries": [
+    {"start": "10:00", "end": "14:00", "title": "Cleaning", "location": "Billdal"}
+  ]
+}
+```
 
 ## Run Once
 
@@ -63,23 +82,24 @@ The worker runs one claim/process cycle and exits.
    - `day_schedule.current_version` set/advanced by DB trigger
    - lease fields (`locked_at`, `locked_by`) cleared
    - `capture_session.state = done`
-4. Force a failure case (e.g., invalid stub version/payload path) and verify:
-   - `capture_session.state = failed`
-   - `capture_session.error` populated
-5. Run worker again and verify no duplicate writes for already-completed sessions.
+4. Edit fixture payload (e.g., change an entry time), enqueue a new session, rerun.
+5. Verify:
+   - new `schedule_version` row inserted with incremented version
+   - previous versions remain immutable
+   - `day_schedule.current_version` points to latest version
 
-### Integration Race Test
+### Integration Tests
 
 If you provide `TEST_DATABASE_URL` (or `DATABASE_URL`), run:
 
 ```bash
-uv run python -m unittest tests/test_integration_claim_locking.py
+uv run python -m unittest tests/test_main_worker.py tests/test_integration_claim_locking.py tests/test_integration_fixture_versioning.py
 ```
 
-This test starts two worker processes against a temporary schema and asserts:
-- only one worker can claim/finalize a session under race
-- pending jobs are prioritized over stale retries
-- a late worker cannot finalize after lease ownership is lost
+Coverage:
+- claim/finalize race safety (`tests/test_integration_claim_locking.py`)
+- fixture payload version timeline (`tests/test_integration_fixture_versioning.py`)
+- unit checks for fixture parsing + insert SQL parameterization (`tests/test_main_worker.py`)
 
 ## Invariants Enforced
 
