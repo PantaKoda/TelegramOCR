@@ -106,7 +106,12 @@ Rules:
 ## Worker Responsibilities (Current Phase)
 
 - Claim one session with `FOR UPDATE SKIP LOCKED` and lease rules
-- Insert one `schedule_version` stub payload
+- Load deterministic payload from a local fixture JSON file
+- Parse `schedule_date` from the fixture payload
+- Compute next version for `(user_id, schedule_date)` as:
+  - `1` when `day_schedule` row does not exist
+  - `current_version + 1` when `day_schedule` row exists
+- Insert one immutable `schedule_version` payload
 - Mark session `done` on success
 - Mark session `failed` with `error` on failure
 - Let DB triggers manage `day_schedule`

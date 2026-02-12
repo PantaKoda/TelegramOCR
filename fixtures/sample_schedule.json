@@ -1,0 +1,17 @@
+{
+  "schedule_date": "2026-02-10",
+  "entries": [
+    {
+      "start": "10:00",
+      "end": "14:00",
+      "title": "Cleaning",
+      "location": "Billdal"
+    },
+    {
+      "start": "15:00",
+      "end": "19:00",
+      "title": "Office",
+      "location": "Molndal"
+    }
+  ]
+}

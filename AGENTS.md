@@ -146,7 +146,8 @@ Rules:
 - Do NOT stitch images together
 - Do NOT overwrite existing schedule versions
 - Do NOT guess dates from timestamps or filenames
-- Date identity must come from OCR UI text
+- During pre-OCR phases, date identity comes from deterministic fixture payload
+- During OCR phases, date identity must come from OCR UI text
 - On failure, mark session `failed` with a clear error
 - On success, mark session `done`
 - Cloudflare R2 is blob storage only
@@ -172,19 +173,21 @@ If the date cannot be resolved or is inconsistent:
 - C# backend complete
 - Sessions grouped and claimed atomically
 - Dispatcher transitions session into worker-claimable queue state
-- Phase 2 session-finalization stub implemented with DB lease claim (`main.py`)
+- Phase 3 fixture-payload worker implemented with DB lease claim (`main.py`)
 - Current worker behavior:
   - claims at most one session per run with `FOR UPDATE SKIP LOCKED`
   - claim policy: `pending` first, stale `processing` lease reclaim
   - sets lease fields (`locked_at`, `locked_by`) on claim
   - refreshes lease heartbeat via `locked_at` while processing long-running work
   - guards heartbeat/finalization with `locked_by` ownership checks
-  - inserts one deterministic stub `schedule_version` payload (`{"stub": true}`)
-  - uses fixed hardcoded `schedule_date` and fixed `version = 1` (Phase 2 stub behavior)
+  - loads deterministic JSON fixture payload from disk
+  - requires fixture payload field `schedule_date` (ISO date string)
+  - computes next version per `(user_id, schedule_date)` from `day_schedule`
+  - inserts one immutable `schedule_version` row for each processed session
   - computes deterministic `payload_hash`
   - transitions `processing → done` on success and clears lease fields
   - transitions `processing → failed` with error on failure and clears lease fields
-- OCR extraction, image download, and schedule parsing are not implemented in Phase 2
+- OCR extraction, image download, and schedule parsing are not implemented in Phase 3
 
 ---
 

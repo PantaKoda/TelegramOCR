@@ -11,6 +11,7 @@ import sys
 import time
 from dataclasses import dataclass
 from datetime import date, datetime
+from pathlib import Path
 from typing import Any
 
 try:
@@ -22,9 +23,7 @@ except ModuleNotFoundError:
     sql = None
     dict_row = None
 
-STUB_SCHEDULE_DATE = date(2099, 1, 1)
-STUB_VERSION = 1
-DUMMY_PAYLOAD = {"stub": True}
+DEFAULT_FIXTURE_PAYLOAD_PATH = "fixtures/sample_schedule.json"
 
 
 class LeaseLostError(RuntimeError):
@@ -78,6 +77,7 @@ class JsonFormatter(logging.Formatter):
 class WorkerConfig:
     database_url: str
     db_schema: str
+    fixture_payload_path: str
     worker_id: str
     pending_state: str
     processing_state: str
@@ -179,6 +179,7 @@ def load_config() -> WorkerConfig:
     config = WorkerConfig(
         database_url=database_url,
         db_schema=os.getenv("DB_SCHEMA", "schedule_ingest"),
+        fixture_payload_path=os.getenv("FIXTURE_PAYLOAD_PATH", DEFAULT_FIXTURE_PAYLOAD_PATH),
         worker_id=os.getenv("WORKER_ID", f"worker-{os.getpid()}"),
         pending_state=os.getenv("PENDING_STATE", "pending"),
         processing_state=os.getenv("PROCESSING_STATE", "processing"),
@@ -199,6 +200,32 @@ def load_config() -> WorkerConfig:
 def make_payload_hash(payload: dict[str, Any]) -> str:
     normalized = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
     return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+
+
+def load_fixture_payload(path: str) -> dict[str, Any]:
+    payload_path = Path(path)
+    if not payload_path.exists():
+        raise RuntimeError(f"Fixture payload file not found: {payload_path}")
+
+    try:
+        raw = json.loads(payload_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"Fixture payload is not valid JSON: {payload_path}") from exc
+
+    if not isinstance(raw, dict):
+        raise RuntimeError("Fixture payload must be a JSON object.")
+    return raw
+
+
+def parse_schedule_date(payload: dict[str, Any]) -> date:
+    value = payload.get("schedule_date")
+    if not isinstance(value, str):
+        raise RuntimeError("Fixture payload must include `schedule_date` as ISO date string.")
+
+    try:
+        return date.fromisoformat(value)
+    except ValueError as exc:
+        raise RuntimeError(f"Invalid schedule_date in fixture payload: {value}") from exc
 
 
 def capture_session_state_type(schema: str):
@@ -281,7 +308,33 @@ def refresh_lease(conn: psycopg.Connection, config: WorkerConfig, session_id: st
             raise LeaseLostError("Lease no longer owned; heartbeat failed.")
 
 
-def insert_stub_schedule_version(
+def get_next_schedule_version(
+    conn: psycopg.Connection,
+    schema: str,
+    *,
+    user_id: int,
+    schedule_date: date,
+) -> int:
+    query = sql.SQL(
+        """
+        SELECT current_version
+        FROM {}.day_schedule
+        WHERE user_id = %s
+          AND schedule_date = %s
+        FOR UPDATE
+        """
+    ).format(sql.Identifier(schema))
+
+    with conn.cursor(row_factory=dict_row) as cur:
+        cur.execute(query, (user_id, schedule_date))
+        row = cur.fetchone()
+
+    if row is None:
+        return 1
+    return int(row["current_version"]) + 1
+
+
+def insert_schedule_version(
     conn: psycopg.Connection,
     schema: str,
     *,
@@ -293,8 +346,6 @@ def insert_stub_schedule_version(
     processing_state: str,
     worker_id: str,
 ) -> None:
-    if version != 1:
-        raise ValueError("Phase 2 only supports version=1.")
     if payload is None or not isinstance(payload, dict):
         raise ValueError("Payload must be a JSON object (dict).")
 
@@ -525,9 +576,16 @@ def maybe_sleep_with_heartbeat(conn: psycopg.Connection, config: WorkerConfig, s
             refresh_lease(conn, config, session.id)
 
 
-def perform_stub_work(conn: psycopg.Connection, config: WorkerConfig, session: ClaimedSession) -> str:
+def perform_fixture_work(
+    conn: psycopg.Connection,
+    config: WorkerConfig,
+    session: ClaimedSession,
+) -> tuple[dict[str, Any], date, str]:
     maybe_sleep_with_heartbeat(conn, config, session)
-    return make_payload_hash(DUMMY_PAYLOAD)
+    payload = load_fixture_payload(config.fixture_payload_path)
+    schedule_date = parse_schedule_date(payload)
+    payload_hash = make_payload_hash(payload)
+    return payload, schedule_date, payload_hash
 
 
 def run_once(config: WorkerConfig, logger: logging.Logger) -> int:
@@ -553,16 +611,22 @@ def run_once(config: WorkerConfig, logger: logging.Logger) -> int:
         )
 
         try:
-            payload_hash = perform_stub_work(conn, config, session)
+            payload, schedule_date, payload_hash = perform_fixture_work(conn, config, session)
 
             with conn.transaction():
-                insert_stub_schedule_version(
+                version = get_next_schedule_version(
+                    conn,
+                    config.db_schema,
+                    user_id=session.user_id,
+                    schedule_date=schedule_date,
+                )
+                insert_schedule_version(
                     conn,
                     config.db_schema,
                     session=session,
-                    schedule_date=STUB_SCHEDULE_DATE,
-                    version=STUB_VERSION,
-                    payload=DUMMY_PAYLOAD,
+                    schedule_date=schedule_date,
+                    version=version,
+                    payload=payload,
                     payload_hash=payload_hash,
                     processing_state=config.processing_state,
                     worker_id=config.worker_id,
@@ -576,8 +640,8 @@ def run_once(config: WorkerConfig, logger: logging.Logger) -> int:
                     "session_id": session.id,
                     "user_id": session.user_id,
                     "worker_id": config.worker_id,
-                    "schedule_date": STUB_SCHEDULE_DATE.isoformat(),
-                    "version": STUB_VERSION,
+                    "schedule_date": schedule_date.isoformat(),
+                    "version": version,
                     "payload_hash": payload_hash,
                 },
             )
@@ -629,7 +693,8 @@ def main() -> int:
         extra={
             "event": "worker.start",
             "db_schema": config.db_schema,
-            "mode": "phase2_lease_claim",
+            "mode": "phase3_fixture_payload",
+            "fixture_payload_path": config.fixture_payload_path,
             "worker_id": config.worker_id,
             "lease_timeout_seconds": config.lease_timeout_seconds,
             "lease_heartbeat_seconds": config.lease_heartbeat_seconds,
