@@ -107,11 +107,19 @@ Rules:
 
 - Claim one session with `FOR UPDATE SKIP LOCKED` and lease rules
 - Load deterministic payload from a local fixture JSON file
+- Optionally apply deterministic seeded noise parser (representation-only changes)
+- Canonicalize payload before hashing/insertion:
+  - normalize time strings
+  - normalize whitespace/casing fields
+  - sort entries deterministically
+- Serialize per `(user_id, schedule_date)` writes via transactional advisory lock
 - Parse `schedule_date` from the fixture payload
 - Compute next version for `(user_id, schedule_date)` as:
   - `1` when `day_schedule` row does not exist
   - `current_version + 1` when `day_schedule` row exists
-- Insert one immutable `schedule_version` payload
+- Insert one immutable `schedule_version` payload only when canonical payload changed
+- If canonical payload hash matches latest version for `(user_id, schedule_date)`, skip insert and mark session done
+- Insert query uses `ON CONFLICT ... DO NOTHING RETURNING` for deterministic create-vs-existing classification
 - Mark session `done` on success
 - Mark session `failed` with `error` on failure
 - Let DB triggers manage `day_schedule`

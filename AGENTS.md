@@ -173,7 +173,7 @@ If the date cannot be resolved or is inconsistent:
 - C# backend complete
 - Sessions grouped and claimed atomically
 - Dispatcher transitions session into worker-claimable queue state
-- Phase 3 fixture-payload worker implemented with DB lease claim (`main.py`)
+- Phase 3.5 chaos-normalization worker implemented with DB lease claim (`main.py`)
 - Current worker behavior:
   - claims at most one session per run with `FOR UPDATE SKIP LOCKED`
   - claim policy: `pending` first, stale `processing` lease reclaim
@@ -181,13 +181,18 @@ If the date cannot be resolved or is inconsistent:
   - refreshes lease heartbeat via `locked_at` while processing long-running work
   - guards heartbeat/finalization with `locked_by` ownership checks
   - loads deterministic JSON fixture payload from disk
+  - optional seeded chaos parser introduces deterministic representation noise (format/casing/whitespace/order)
+  - canonicalizes payload before hashing/persistence (time/text normalization + deterministic entry ordering)
+  - serializes per `(user_id, schedule_date)` writes with transactional advisory lock
+  - insert path uses `ON CONFLICT ... DO NOTHING RETURNING` to classify created vs existing row
   - requires fixture payload field `schedule_date` (ISO date string)
   - computes next version per `(user_id, schedule_date)` from `day_schedule`
-  - inserts one immutable `schedule_version` row for each processed session
+  - inserts one immutable `schedule_version` row only when canonical payload changed
+  - when canonical payload hash matches latest version, marks session done without inserting new version
   - computes deterministic `payload_hash`
   - transitions `processing → done` on success and clears lease fields
   - transitions `processing → failed` with error on failure and clears lease fields
-- OCR extraction, image download, and schedule parsing are not implemented in Phase 3
+- OCR extraction, image download, and real schedule parsing are not implemented in Phase 3.5
 
 ---
 
