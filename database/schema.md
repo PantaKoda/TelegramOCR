@@ -42,10 +42,14 @@ Rules:
 - `error` is populated only when state is `failed`
 - worker claims with transactional lease:
   - claim `pending`, or stale `processing`
+  - prioritize `pending` ahead of stale `processing`
   - on claim set `state=processing`, `locked_at=now()`, `locked_by=<worker>`
+- worker heartbeat:
+  - refresh `locked_at` while still processing long jobs
+  - refresh/update must be guarded by `locked_by=<worker>`
 - worker finalization:
-  - success: `state=done`, clear lease fields
-  - failure: `state=failed`, set `error`, clear lease fields
+  - success: `state=done`, clear lease fields (only if `locked_by=<worker>`)
+  - failure: `state=failed`, set `error`, clear lease fields (only if `locked_by=<worker>`)
 
 ## Table: `capture_image`
 

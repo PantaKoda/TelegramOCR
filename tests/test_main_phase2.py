@@ -12,6 +12,7 @@ class InsertStubScheduleVersionTests(unittest.TestCase):
     def test_insert_stub_schedule_version_success_executes_insert(self) -> None:
         conn = MagicMock()
         cur = MagicMock()
+        cur.rowcount = 1
         conn.cursor.return_value.__enter__.return_value = cur
 
         worker.insert_stub_schedule_version(
@@ -22,16 +23,19 @@ class InsertStubScheduleVersionTests(unittest.TestCase):
             version=1,
             payload={"stub": True},
             payload_hash="abc123",
+            processing_state="processing",
+            worker_id="worker-1",
         )
 
         cur.execute.assert_called_once()
         _, params = cur.execute.call_args[0]
-        self.assertEqual(params[0], self.session.user_id)
-        self.assertEqual(params[1], date(2099, 1, 1))
-        self.assertEqual(params[2], 1)
-        self.assertEqual(params[3], self.session.id)
-        self.assertEqual(params[4], '{"stub":true}')
-        self.assertEqual(params[5], "abc123")
+        self.assertEqual(params[0], date(2099, 1, 1))
+        self.assertEqual(params[1], 1)
+        self.assertEqual(params[2], '{"stub":true}')
+        self.assertEqual(params[3], "abc123")
+        self.assertEqual(params[4], self.session.id)
+        self.assertEqual(params[5], "processing")
+        self.assertEqual(params[6], "worker-1")
 
     def test_insert_stub_schedule_version_rejects_bad_version(self) -> None:
         conn = MagicMock()
@@ -45,6 +49,8 @@ class InsertStubScheduleVersionTests(unittest.TestCase):
                 version=2,
                 payload={"stub": True},
                 payload_hash="abc123",
+                processing_state="processing",
+                worker_id="worker-1",
             )
 
         conn.cursor.assert_not_called()
@@ -61,6 +67,8 @@ class InsertStubScheduleVersionTests(unittest.TestCase):
                 version=1,
                 payload=None,
                 payload_hash="abc123",
+                processing_state="processing",
+                worker_id="worker-1",
             )
 
         conn.cursor.assert_not_called()

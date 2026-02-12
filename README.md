@@ -10,6 +10,7 @@ Phase 2 validates DB finalization + claim concurrency correctness:
 - stub `schedule_version` insert with payload `{"stub": true}`
 - fixed `schedule_date` (hardcoded) and fixed `version = 1`
 - deterministic payload hash
+- ownership-guarded finalization (`locked_by` must match claimer)
 - session transition: `processing -> done | failed`, clearing lease fields
 
 No OCR, image download, or parsing is performed in this phase.
@@ -35,6 +36,8 @@ Optional:
 - `DB_SCHEMA` (default: `schedule_ingest`)
 - `WORKER_ID` (default: `worker-<pid>`)
 - `LEASE_TIMEOUT_SECONDS` (default: `300`)
+- `LEASE_HEARTBEAT_SECONDS` (default: `10`)
+- `ENABLE_LEASE_HEARTBEAT` (default: `true`)
 - `SIMULATED_WORK_SECONDS` (default: `0`, test hook)
 - `PENDING_STATE` (default: `pending`)
 - `PROCESSING_STATE` (default: `processing`)
@@ -73,4 +76,7 @@ If you provide `TEST_DATABASE_URL` (or `DATABASE_URL`), run:
 uv run python -m unittest tests/test_integration_claim_locking.py
 ```
 
-This test starts two worker processes against a temporary schema and asserts only one claims and finalizes the same session.
+This test starts two worker processes against a temporary schema and asserts:
+- only one worker can claim/finalize a session under race
+- pending jobs are prioritized over stale retries
+- a late worker cannot finalize after lease ownership is lost

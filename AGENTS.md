@@ -177,6 +177,8 @@ If the date cannot be resolved or is inconsistent:
   - claims at most one session per run with `FOR UPDATE SKIP LOCKED`
   - claim policy: `pending` first, stale `processing` lease reclaim
   - sets lease fields (`locked_at`, `locked_by`) on claim
+  - refreshes lease heartbeat via `locked_at` while processing long-running work
+  - guards heartbeat/finalization with `locked_by` ownership checks
   - inserts one deterministic stub `schedule_version` payload (`{"stub": true}`)
   - uses fixed hardcoded `schedule_date` and fixed `version = 1` (Phase 2 stub behavior)
   - computes deterministic `payload_hash`

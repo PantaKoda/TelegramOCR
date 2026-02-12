@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Session finalization worker with transactional lease claim and skip-locked concurrency safety."""
+"""Session finalization worker with lease-based claiming and ownership-guarded finalization."""
 
 from __future__ import annotations
 
@@ -25,6 +25,10 @@ except ModuleNotFoundError:
 STUB_SCHEDULE_DATE = date(2099, 1, 1)
 STUB_VERSION = 1
 DUMMY_PAYLOAD = {"stub": True}
+
+
+class LeaseLostError(RuntimeError):
+    """Raised when worker no longer owns lease for the session."""
 
 
 class JsonFormatter(logging.Formatter):
@@ -80,7 +84,9 @@ class WorkerConfig:
     done_state: str
     failed_state: str
     lease_timeout_seconds: int
+    lease_heartbeat_seconds: float
     simulated_work_seconds: float
+    enable_lease_heartbeat: bool
 
 
 @dataclass(frozen=True)
@@ -127,7 +133,20 @@ def parse_int_env(name: str, default: int) -> int:
     return parsed
 
 
-def parse_float_env(name: str, default: float) -> float:
+def parse_positive_float_env(name: str, default: float) -> float:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    try:
+        parsed = float(value)
+    except ValueError as exc:
+        raise RuntimeError(f"Invalid float for {name}: {value}") from exc
+    if parsed <= 0:
+        raise RuntimeError(f"{name} must be > 0.")
+    return parsed
+
+
+def parse_non_negative_float_env(name: str, default: float) -> float:
     value = os.getenv(name)
     if value is None:
         return default
@@ -138,6 +157,18 @@ def parse_float_env(name: str, default: float) -> float:
     if parsed < 0:
         raise RuntimeError(f"{name} must be >= 0.")
     return parsed
+
+
+def parse_bool_env(name: str, default: bool) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    normalized = value.strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    raise RuntimeError(f"Invalid boolean for {name}: {value}")
 
 
 def load_config() -> WorkerConfig:
@@ -154,7 +185,9 @@ def load_config() -> WorkerConfig:
         done_state=os.getenv("DONE_STATE", "done"),
         failed_state=os.getenv("FAILED_STATE", "failed"),
         lease_timeout_seconds=parse_int_env("LEASE_TIMEOUT_SECONDS", 300),
-        simulated_work_seconds=parse_float_env("SIMULATED_WORK_SECONDS", 0.0),
+        lease_heartbeat_seconds=parse_positive_float_env("LEASE_HEARTBEAT_SECONDS", 10.0),
+        simulated_work_seconds=parse_non_negative_float_env("SIMULATED_WORK_SECONDS", 0.0),
+        enable_lease_heartbeat=parse_bool_env("ENABLE_LEASE_HEARTBEAT", True),
     )
 
 
@@ -169,15 +202,17 @@ def claim_one_session(conn: psycopg.Connection, config: WorkerConfig) -> Claimed
         WITH candidate AS (
             SELECT id
             FROM {}.capture_session
-            WHERE state::text = {}
+            WHERE state::text = %s
                OR (
-                    state::text = {}
+                    state::text = %s
                     AND (
                         locked_at IS NULL
                         OR locked_at < NOW() - make_interval(secs => %s)
                     )
                )
-            ORDER BY created_at
+            ORDER BY
+                CASE WHEN state::text = %s THEN 0 ELSE 1 END,
+                created_at
             FOR UPDATE SKIP LOCKED
             LIMIT 1
         )
@@ -192,8 +227,6 @@ def claim_one_session(conn: psycopg.Connection, config: WorkerConfig) -> Claimed
         """
     ).format(
         sql.Identifier(config.db_schema),
-        sql.Literal(config.pending_state),
-        sql.Literal(config.processing_state),
         sql.Identifier(config.db_schema),
         sql.Literal(config.processing_state),
     )
@@ -202,7 +235,10 @@ def claim_one_session(conn: psycopg.Connection, config: WorkerConfig) -> Claimed
         cur.execute(
             query,
             (
+                config.pending_state,
+                config.processing_state,
                 config.lease_timeout_seconds,
+                config.pending_state,
                 config.worker_id,
             ),
         )
@@ -211,6 +247,23 @@ def claim_one_session(conn: psycopg.Connection, config: WorkerConfig) -> Claimed
     if row is None:
         return None
     return ClaimedSession(id=row["id"], user_id=row["user_id"])
+
+
+def refresh_lease(conn: psycopg.Connection, config: WorkerConfig, session_id: str) -> None:
+    query = sql.SQL(
+        """
+        UPDATE {}.capture_session
+        SET locked_at = NOW()
+        WHERE id = %s
+          AND state::text = %s
+          AND locked_by = %s
+        """
+    ).format(sql.Identifier(config.db_schema))
+
+    with conn.cursor() as cur:
+        cur.execute(query, (session_id, config.processing_state, config.worker_id))
+        if cur.rowcount != 1:
+            raise LeaseLostError("Lease no longer owned; heartbeat failed.")
 
 
 def insert_stub_schedule_version(
@@ -222,6 +275,8 @@ def insert_stub_schedule_version(
     version: int,
     payload: dict[str, Any] | None,
     payload_hash: str,
+    processing_state: str,
+    worker_id: str,
 ) -> None:
     if version != 1:
         raise ValueError("Phase 2 only supports version=1.")
@@ -237,22 +292,36 @@ def insert_stub_schedule_version(
             session_id,
             payload,
             payload_hash
-        ) VALUES (%s, %s, %s, %s, %s::jsonb, %s)
+        )
+        SELECT
+            cs.user_id,
+            %s,
+            %s,
+            cs.id,
+            %s::jsonb,
+            %s
+        FROM {}.capture_session cs
+        WHERE cs.id = %s
+          AND cs.state::text = %s
+          AND cs.locked_by = %s
         """
-    ).format(sql.Identifier(schema))
+    ).format(sql.Identifier(schema), sql.Identifier(schema))
 
     with conn.cursor() as cur:
         cur.execute(
             query,
             (
-                session.user_id,
                 schedule_date,
                 version,
-                session.id,
                 json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False),
                 payload_hash,
+                session.id,
+                processing_state,
+                worker_id,
             ),
         )
+        if cur.rowcount != 1:
+            raise LeaseLostError("Lease lost before schedule_version insert.")
 
 
 def mark_session_done(conn: psycopg.Connection, config: WorkerConfig, session_id: str) -> None:
@@ -263,18 +332,19 @@ def mark_session_done(conn: psycopg.Connection, config: WorkerConfig, session_id
             error = NULL,
             locked_at = NULL,
             locked_by = NULL
-        WHERE id = %s AND state::text = {}
+        WHERE id = %s
+          AND state::text = %s
+          AND locked_by = %s
         """
     ).format(
         sql.Identifier(config.db_schema),
         sql.Literal(config.done_state),
-        sql.Literal(config.processing_state),
     )
 
     with conn.cursor() as cur:
-        cur.execute(query, (session_id,))
+        cur.execute(query, (session_id, config.processing_state, config.worker_id))
         if cur.rowcount != 1:
-            raise RuntimeError(f"Expected one session transition to done, got {cur.rowcount}.")
+            raise LeaseLostError("Lease lost before done transition.")
 
 
 def mark_session_failed(
@@ -282,7 +352,7 @@ def mark_session_failed(
     config: WorkerConfig,
     session_id: str,
     error_text: str,
-) -> None:
+) -> bool:
     query = sql.SQL(
         """
         UPDATE {}.capture_session
@@ -290,18 +360,18 @@ def mark_session_failed(
             error = %s,
             locked_at = NULL,
             locked_by = NULL
-        WHERE id = %s AND state::text = {}
+        WHERE id = %s
+          AND state::text = %s
+          AND locked_by = %s
         """
     ).format(
         sql.Identifier(config.db_schema),
         sql.Literal(config.failed_state),
-        sql.Literal(config.processing_state),
     )
 
     with conn.cursor() as cur:
-        cur.execute(query, (error_text, session_id))
-        if cur.rowcount != 1:
-            raise RuntimeError(f"Expected one session transition to failed, got {cur.rowcount}.")
+        cur.execute(query, (error_text, session_id, config.processing_state, config.worker_id))
+        return cur.rowcount == 1
 
 
 def truncate_error(message: str, limit: int = 4000) -> str:
@@ -310,69 +380,70 @@ def truncate_error(message: str, limit: int = 4000) -> str:
     return message[: limit - 3] + "..."
 
 
-def perform_stub_work(
-    *,
-    conn: psycopg.Connection,
-    config: WorkerConfig,
-    session: ClaimedSession,
-) -> str:
-    if config.simulated_work_seconds > 0:
-        time.sleep(config.simulated_work_seconds)
+def maybe_sleep_with_heartbeat(conn: psycopg.Connection, config: WorkerConfig, session: ClaimedSession) -> None:
+    remaining = config.simulated_work_seconds
+    if remaining <= 0:
+        return
 
-    payload_hash = make_payload_hash(DUMMY_PAYLOAD)
+    if not config.enable_lease_heartbeat:
+        time.sleep(remaining)
+        return
 
-    insert_stub_schedule_version(
-        conn,
-        config.db_schema,
-        session=session,
-        schedule_date=STUB_SCHEDULE_DATE,
-        version=STUB_VERSION,
-        payload=DUMMY_PAYLOAD,
-        payload_hash=payload_hash,
-    )
+    with conn.transaction():
+        refresh_lease(conn, config, session.id)
 
-    return payload_hash
+    while remaining > 0:
+        chunk = min(config.lease_heartbeat_seconds, remaining)
+        time.sleep(chunk)
+        remaining -= chunk
+
+        with conn.transaction():
+            refresh_lease(conn, config, session.id)
+
+
+def perform_stub_work(conn: psycopg.Connection, config: WorkerConfig, session: ClaimedSession) -> str:
+    maybe_sleep_with_heartbeat(conn, config, session)
+    return make_payload_hash(DUMMY_PAYLOAD)
 
 
 def run_once(config: WorkerConfig, logger: logging.Logger) -> int:
     with psycopg.connect(config.database_url) as conn:
         with conn.transaction():
             session = claim_one_session(conn, config)
-            if session is None:
-                logger.info(
-                    "No claimable session found",
-                    extra={"event": "worker.no_session"},
-                )
-                return 0
 
+        if session is None:
             logger.info(
-                "Claimed session",
-                extra={
-                    "event": "session.claimed",
-                    "session_id": session.id,
-                    "user_id": session.user_id,
-                    "worker_id": config.worker_id,
-                },
+                "No claimable session found",
+                extra={"event": "worker.no_session"},
             )
+            return 0
 
-            try:
-                with conn.transaction():
-                    payload_hash = perform_stub_work(conn=conn, config=config, session=session)
-                    mark_session_done(conn, config, session.id)
-            except Exception as exc:
-                error_text = truncate_error(str(exc))
-                mark_session_failed(conn, config, session.id, error_text)
-                logger.error(
-                    "Session finalization failed",
-                    extra={
-                        "event": "session.failed",
-                        "session_id": session.id,
-                        "user_id": session.user_id,
-                        "worker_id": config.worker_id,
-                        "error": error_text,
-                    },
+        logger.info(
+            "Claimed session",
+            extra={
+                "event": "session.claimed",
+                "session_id": session.id,
+                "user_id": session.user_id,
+                "worker_id": config.worker_id,
+            },
+        )
+
+        try:
+            payload_hash = perform_stub_work(conn, config, session)
+
+            with conn.transaction():
+                insert_stub_schedule_version(
+                    conn,
+                    config.db_schema,
+                    session=session,
+                    schedule_date=STUB_SCHEDULE_DATE,
+                    version=STUB_VERSION,
+                    payload=DUMMY_PAYLOAD,
+                    payload_hash=payload_hash,
+                    processing_state=config.processing_state,
+                    worker_id=config.worker_id,
                 )
-                return 0
+                mark_session_done(conn, config, session.id)
 
             logger.info(
                 "Session finalized",
@@ -387,6 +458,36 @@ def run_once(config: WorkerConfig, logger: logging.Logger) -> int:
                 },
             )
             return 1
+        except LeaseLostError as exc:
+            logger.warning(
+                "Lease lost before finalization",
+                extra={
+                    "event": "session.lease_lost",
+                    "session_id": session.id,
+                    "user_id": session.user_id,
+                    "worker_id": config.worker_id,
+                    "error": str(exc),
+                },
+            )
+            return 0
+        except Exception as exc:
+            error_text = truncate_error(str(exc))
+            failed_updated = False
+            with conn.transaction():
+                failed_updated = mark_session_failed(conn, config, session.id, error_text)
+
+            logger.error(
+                "Session finalization failed",
+                extra={
+                    "event": "session.failed",
+                    "session_id": session.id,
+                    "user_id": session.user_id,
+                    "worker_id": config.worker_id,
+                    "error": error_text,
+                    "failed_transition_applied": failed_updated,
+                },
+            )
+            return 0
 
 
 def main() -> int:
@@ -410,6 +511,8 @@ def main() -> int:
             "mode": "phase2_lease_claim",
             "worker_id": config.worker_id,
             "lease_timeout_seconds": config.lease_timeout_seconds,
+            "lease_heartbeat_seconds": config.lease_heartbeat_seconds,
+            "enable_lease_heartbeat": config.enable_lease_heartbeat,
         },
     )
 
