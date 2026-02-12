@@ -17,8 +17,9 @@ Phase 3.5 validates noise-tolerant versioning before OCR:
 - inserts use `ON CONFLICT ... DO NOTHING RETURNING` to classify create-vs-existing outcomes via DB result
 - ownership-guarded insert/finalization (`locked_by` must match claimer)
 - session transition: `processing -> done | failed`, clearing lease fields
+- deterministic pre-OCR layout parser module for OCR-like boxes (`parser/layout_parser.py`)
 
-No OCR, image download, or parsing is performed in this phase.
+Real OCR integration and image parsing are not wired into the worker yet.
 
 ## Setup
 
@@ -70,6 +71,23 @@ Example:
 }
 ```
 
+## Layout Parser (Phase 4 Pre-OCR)
+
+Module: `parser/layout_parser.py`
+
+Main API:
+
+```python
+parse_layout(boxes: list[Box]) -> list[Entry]
+```
+
+Behavior:
+- sorts boxes by geometry
+- clusters boxes into lines
+- groups lines into cards by vertical gaps
+- extracts time/title/address/location per card
+- ignores top UI chrome cards with no time line
+
 ## Run Once
 
 ```bash
@@ -104,13 +122,14 @@ The worker runs one claim/process cycle and exits.
 If you provide `TEST_DATABASE_URL` (or `DATABASE_URL`), run:
 
 ```bash
-uv run python -m unittest tests/test_main_worker.py tests/test_integration_claim_locking.py tests/test_integration_fixture_versioning.py
+uv run python -m unittest tests/test_layout_parser.py tests/test_main_worker.py tests/test_integration_claim_locking.py tests/test_integration_fixture_versioning.py
 ```
 
 Coverage:
 - claim/finalize race safety (`tests/test_integration_claim_locking.py`)
 - fixture payload version timeline (`tests/test_integration_fixture_versioning.py`)
 - chaos noise does not create phantom versions (`tests/test_integration_fixture_versioning.py`)
+- synthetic layout reconstruction (single card, stacked cards, wrapped address, header ignore, jitter, landscape columns) (`tests/test_layout_parser.py`)
 - unit checks for fixture parsing + insert SQL parameterization (`tests/test_main_worker.py`)
 
 ## Invariants Enforced
