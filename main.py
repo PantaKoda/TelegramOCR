@@ -201,28 +201,33 @@ def make_payload_hash(payload: dict[str, Any]) -> str:
     return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
 
 
+def capture_session_state_type(schema: str):
+    return sql.Identifier(schema, "capture_session_state")
+
+
 def claim_one_session(conn: psycopg.Connection, config: WorkerConfig) -> ClaimedSession | None:
+    state_type = capture_session_state_type(config.db_schema)
     query = sql.SQL(
         """
         WITH candidate AS (
             SELECT id
             FROM {}.capture_session
-            WHERE state::text = %s
+            WHERE state = %s::{}
                OR (
-                    state::text = %s
+                    state = %s::{}
                     AND (
                         locked_at IS NULL
                         OR locked_at < NOW() - make_interval(secs => %s)
                     )
                )
             ORDER BY
-                CASE WHEN state::text = %s THEN 0 ELSE 1 END,
+                CASE WHEN state = %s::{} THEN 0 ELSE 1 END,
                 created_at
             FOR UPDATE SKIP LOCKED
             LIMIT 1
         )
         UPDATE {}.capture_session AS cs
-        SET state = {},
+        SET state = %s::{},
             locked_at = NOW(),
             locked_by = %s,
             error = NULL
@@ -232,8 +237,11 @@ def claim_one_session(conn: psycopg.Connection, config: WorkerConfig) -> Claimed
         """
     ).format(
         sql.Identifier(config.db_schema),
+        state_type,
+        state_type,
+        state_type,
         sql.Identifier(config.db_schema),
-        sql.Literal(config.processing_state),
+        state_type,
     )
 
     with conn.cursor(row_factory=dict_row) as cur:
@@ -244,6 +252,7 @@ def claim_one_session(conn: psycopg.Connection, config: WorkerConfig) -> Claimed
                 config.processing_state,
                 config.lease_timeout_seconds,
                 config.pending_state,
+                config.processing_state,
                 config.worker_id,
             ),
         )
@@ -255,15 +264,16 @@ def claim_one_session(conn: psycopg.Connection, config: WorkerConfig) -> Claimed
 
 
 def refresh_lease(conn: psycopg.Connection, config: WorkerConfig, session_id: str) -> None:
+    state_type = capture_session_state_type(config.db_schema)
     query = sql.SQL(
         """
         UPDATE {}.capture_session
         SET locked_at = NOW()
         WHERE id = %s
-          AND state::text = %s
+          AND state = %s::{}
           AND locked_by = %s
         """
-    ).format(sql.Identifier(config.db_schema))
+    ).format(sql.Identifier(config.db_schema), state_type)
 
     with conn.cursor() as cur:
         cur.execute(query, (session_id, config.processing_state, config.worker_id))
@@ -307,10 +317,14 @@ def insert_stub_schedule_version(
             %s
         FROM {}.capture_session cs
         WHERE cs.id = %s
-          AND cs.state::text = %s
+          AND cs.state = %s::{}
           AND cs.locked_by = %s
         """
-    ).format(sql.Identifier(schema), sql.Identifier(schema))
+    ).format(
+        sql.Identifier(schema),
+        sql.Identifier(schema),
+        capture_session_state_type(schema),
+    )
 
     with conn.cursor() as cur:
         cur.execute(
@@ -330,24 +344,26 @@ def insert_stub_schedule_version(
 
 
 def mark_session_done(conn: psycopg.Connection, config: WorkerConfig, session_id: str) -> None:
+    state_type = capture_session_state_type(config.db_schema)
     query = sql.SQL(
         """
         UPDATE {}.capture_session
-        SET state = {},
+        SET state = %s::{},
             error = NULL,
             locked_at = NULL,
             locked_by = NULL
         WHERE id = %s
-          AND state::text = %s
+          AND state = %s::{}
           AND locked_by = %s
         """
     ).format(
         sql.Identifier(config.db_schema),
-        sql.Literal(config.done_state),
+        state_type,
+        state_type,
     )
 
     with conn.cursor() as cur:
-        cur.execute(query, (session_id, config.processing_state, config.worker_id))
+        cur.execute(query, (config.done_state, session_id, config.processing_state, config.worker_id))
         if cur.rowcount != 1:
             raise LeaseLostError("Lease lost before done transition.")
 
@@ -358,25 +374,128 @@ def mark_session_failed(
     session_id: str,
     error_text: str,
 ) -> bool:
+    state_type = capture_session_state_type(config.db_schema)
     query = sql.SQL(
         """
         UPDATE {}.capture_session
-        SET state = {},
+        SET state = %s::{},
             error = %s,
             locked_at = NULL,
             locked_by = NULL
         WHERE id = %s
-          AND state::text = %s
+          AND state = %s::{}
           AND locked_by = %s
         """
     ).format(
         sql.Identifier(config.db_schema),
-        sql.Literal(config.failed_state),
+        state_type,
+        state_type,
     )
 
     with conn.cursor() as cur:
-        cur.execute(query, (error_text, session_id, config.processing_state, config.worker_id))
+        cur.execute(
+            query,
+            (
+                config.failed_state,
+                error_text,
+                session_id,
+                config.processing_state,
+                config.worker_id,
+            ),
+        )
         return cur.rowcount == 1
+
+
+def fetch_session_status(conn: psycopg.Connection, config: WorkerConfig, session_id: str) -> dict[str, Any] | None:
+    query = sql.SQL(
+        """
+        SELECT state::text AS state, locked_by, error
+        FROM {}.capture_session
+        WHERE id = %s
+        """
+    ).format(sql.Identifier(config.db_schema))
+
+    with conn.cursor(row_factory=dict_row) as cur:
+        cur.execute(query, (session_id,))
+        return cur.fetchone()
+
+
+def classify_lease_loss(
+    *,
+    conn: psycopg.Connection,
+    config: WorkerConfig,
+    session: ClaimedSession,
+    logger: logging.Logger,
+    reason: str,
+) -> None:
+    status = fetch_session_status(conn, config, session.id)
+    if status is None:
+        logger.error(
+            "Lease lost and session row not found",
+            extra={
+                "event": "session.lease_lost_missing_row",
+                "session_id": session.id,
+                "user_id": session.user_id,
+                "worker_id": config.worker_id,
+                "reason": reason,
+            },
+        )
+        return
+
+    state = status["state"]
+    locked_by = status["locked_by"]
+    if state == config.done_state:
+        logger.info(
+            "Session already done after lease loss",
+            extra={
+                "event": "session.lease_lost_already_done",
+                "session_id": session.id,
+                "user_id": session.user_id,
+                "worker_id": config.worker_id,
+                "reason": reason,
+            },
+        )
+        return
+    if state == config.failed_state:
+        logger.info(
+            "Session already failed after lease loss",
+            extra={
+                "event": "session.lease_lost_already_failed",
+                "session_id": session.id,
+                "user_id": session.user_id,
+                "worker_id": config.worker_id,
+                "reason": reason,
+                "error": status["error"],
+            },
+        )
+        return
+    if state == config.processing_state and locked_by != config.worker_id:
+        logger.warning(
+            "Lease ownership transferred to another worker",
+            extra={
+                "event": "session.lease_lost_transferred",
+                "session_id": session.id,
+                "user_id": session.user_id,
+                "worker_id": config.worker_id,
+                "new_locked_by": locked_by,
+                "reason": reason,
+            },
+        )
+        return
+
+    logger.error(
+        "Lease lost with unexpected session status",
+        extra={
+            "event": "session.lease_lost_unexpected_status",
+            "session_id": session.id,
+            "user_id": session.user_id,
+            "worker_id": config.worker_id,
+            "reason": reason,
+            "state": state,
+            "locked_by": locked_by,
+            "error": status["error"],
+        },
+    )
 
 
 def truncate_error(message: str, limit: int = 4000) -> str:
@@ -464,15 +583,12 @@ def run_once(config: WorkerConfig, logger: logging.Logger) -> int:
             )
             return 1
         except LeaseLostError as exc:
-            logger.warning(
-                "Lease lost before finalization",
-                extra={
-                    "event": "session.lease_lost",
-                    "session_id": session.id,
-                    "user_id": session.user_id,
-                    "worker_id": config.worker_id,
-                    "error": str(exc),
-                },
+            classify_lease_loss(
+                conn=conn,
+                config=config,
+                session=session,
+                logger=logger,
+                reason=str(exc),
             )
             return 0
         except Exception as exc:

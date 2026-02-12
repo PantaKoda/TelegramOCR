@@ -270,7 +270,10 @@ class WorkerClaimLockingIntegrationTests(unittest.TestCase):
             self.assertEqual(worker_b.returncode, 0, msg=f"worker_b failed\nstdout:\n{stdout_b}\nstderr:\n{stderr_b}")
             self.assertEqual(worker_a.returncode, 0, msg=f"worker_a failed\nstdout:\n{stdout_a}\nstderr:\n{stderr_a}")
             self.assertIn('"event": "session.done"', stdout_b)
-            self.assertIn('"event": "session.lease_lost"', stdout_a)
+            self.assertRegex(
+                stdout_a,
+                r'"event": "session\.lease_lost_(transferred|already_done|already_failed|unexpected_status|missing_row)"',
+            )
 
             with psycopg.connect(DB_URL) as conn:
                 with conn.cursor(row_factory=dict_row) as cur:
