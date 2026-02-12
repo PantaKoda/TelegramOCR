@@ -176,7 +176,7 @@ def load_config() -> WorkerConfig:
     if not database_url:
         raise RuntimeError("Missing required environment variable: DATABASE_URL")
 
-    return WorkerConfig(
+    config = WorkerConfig(
         database_url=database_url,
         db_schema=os.getenv("DB_SCHEMA", "schedule_ingest"),
         worker_id=os.getenv("WORKER_ID", f"worker-{os.getpid()}"),
@@ -189,6 +189,11 @@ def load_config() -> WorkerConfig:
         simulated_work_seconds=parse_non_negative_float_env("SIMULATED_WORK_SECONDS", 0.0),
         enable_lease_heartbeat=parse_bool_env("ENABLE_LEASE_HEARTBEAT", True),
     )
+    if config.enable_lease_heartbeat and config.lease_heartbeat_seconds >= (config.lease_timeout_seconds / 3):
+        raise RuntimeError(
+            "Unsafe lease settings: LEASE_HEARTBEAT_SECONDS must be < LEASE_TIMEOUT_SECONDS / 3."
+        )
+    return config
 
 
 def make_payload_hash(payload: dict[str, Any]) -> str:

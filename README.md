@@ -80,3 +80,10 @@ This test starts two worker processes against a temporary schema and asserts:
 - only one worker can claim/finalize a session under race
 - pending jobs are prioritized over stale retries
 - a late worker cannot finalize after lease ownership is lost
+
+## Invariants Enforced
+
+- finalization requires lease ownership (`locked_by` guard in SQL)
+- schedule version insert requires lease ownership (`locked_by` guard in SQL)
+- one schedule_version per session (`UNIQUE(session_id)`)
+- heartbeat safety check: `LEASE_HEARTBEAT_SECONDS < LEASE_TIMEOUT_SECONDS / 3`

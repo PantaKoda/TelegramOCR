@@ -10,3 +10,7 @@ ADD COLUMN IF NOT EXISTS locked_by text NULL;
 
 CREATE INDEX IF NOT EXISTS ix_capture_session_claim
 ON schedule_ingest.capture_session (state, created_at, locked_at);
+
+-- Exactly-once seatbelt: one schedule_version row per capture session.
+CREATE UNIQUE INDEX IF NOT EXISTS ux_schedule_version_session_id
+ON schedule_ingest.schedule_version (session_id);
