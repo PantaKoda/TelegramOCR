@@ -173,17 +173,15 @@ If the date cannot be resolved or is inconsistent:
 - C# backend complete
 - Sessions grouped and claimed atomically
 - Dispatcher transitions `closed → processing`
-- Phase 1 skeleton worker implemented in Python (`main.py`)
+- Phase 2 session-finalization stub implemented in Python (`main.py`)
 - Current worker behavior:
-  - reads `capture_session` rows where `state = processing`
-  - loads ordered `capture_image` rows by `sequence`
-  - downloads image blobs from R2 by `r2_key` (no OCR/parsing)
+  - selects at most one `capture_session` row where `state = processing` per run
   - inserts one deterministic stub `schedule_version` payload (`{"stub": true}`)
+  - uses fixed hardcoded `schedule_date` and fixed `version = 1` (Phase 2 stub behavior)
   - computes deterministic `payload_hash`
   - transitions session `processing → done` on success
-  - transitions session `processing → failed` with error on failure (default behavior)
-  - optional debug mode: when `KEEP_PROCESSING_ON_FAILURE=true`, failed sessions are left in `processing`
-- OCR extraction and schedule parsing are not implemented in Phase 1
+  - transitions session `processing → failed` with error on failure
+- OCR extraction, image download, and schedule parsing are not implemented in Phase 2
 
 ---
 
