@@ -1,33 +1,16 @@
-Perfect — thanks for pasting the **actual executed schema**.
-Based on this, below is a **clean, copy-paste-ready `database/schema.md`** that you can commit and then point the Python OCR agent to.
-
-This is **documentation**, not SQL, and reflects **exactly** what you have live now.
-
----
-
-```md
 # Database Schema (Authoritative)
 
-This document describes the PostgreSQL schema under the `schedule_ingest` schema.
+This document describes the `schedule_ingest` PostgreSQL schema contract used by the Python OCR worker.
 
-It is the **authoritative contract** between:
-- the C# backend (schema owner)
-- the Python OCR worker (schema consumer)
+## Scope
 
-The Python OCR worker **must not infer schema by probing a live database**.
-All queries must be written according to this document.
+- Schema owner: C# backend
+- Schema consumer: Python worker
+- Worker must follow this contract and rely on DB constraints/triggers
 
----
+## Enum: `capture_session_state`
 
-## Schema: schedule_ingest
-
-All tables, types, functions, and triggers live under the `schedule_ingest` schema.
-
----
-
-## Enum: capture_session_state
-
-Possible values:
+Allowed values:
 
 - `open`
 - `closed`
@@ -35,200 +18,87 @@ Possible values:
 - `done`
 - `failed`
 
-This enum drives the capture session lifecycle and is enforced by database triggers.
+Lifecycle:
 
----
+- `open -> closed | failed`
+- `closed -> processing | failed`
+- `processing -> done | failed`
 
-## Table: capture_session
+## Table: `capture_session`
 
-**Purpose**  
-Represents a logical grouping of screenshots and the unit of OCR work.
+Purpose: unit of worker processing.
 
-Each session corresponds to **exactly one OCR attempt**.
+Columns:
 
-**Columns**
+- `id` uuid PK
+- `user_id` bigint NOT NULL
+- `state` capture_session_state NOT NULL
+- `created_at` timestamptz NOT NULL
+- `closed_at` timestamptz NULL
+- `error` text NULL
 
-- `id` (uuid, PK)  
-  Unique identifier for the capture session.
+Rules:
 
-- `user_id` (bigint, NOT NULL)  
-  Telegram user ID.
+- `closed_at` is NULL only when state is `open`
+- `error` is populated only when state is `failed`
+- Worker may transition only from `processing` to `done` or `failed`
 
-- `state` (capture_session_state, NOT NULL)  
-  Current lifecycle state of the session.
+## Table: `capture_image`
 
-- `created_at` (timestamptz, NOT NULL)  
-  Session creation timestamp.
+Purpose: ordered image metadata for a session.
 
-- `closed_at` (timestamptz, NULLABLE)  
-  Timestamp when the session transitioned out of `open`.
+Columns:
 
-- `error` (text, NULLABLE)  
-  Error message when state is `failed`.
+- `id` uuid PK
+- `session_id` uuid FK -> `capture_session.id`
+- `sequence` integer NOT NULL (> 0)
+- `r2_key` text NOT NULL (unique)
+- `telegram_message_id` bigint NULL
+- `created_at` timestamptz NOT NULL
 
-**Constraints & Rules**
+Rules:
 
-- `closed_at` must be NULL while state = `open`
-- `closed_at` must be NOT NULL for all other states
-- `error` is allowed only when state = `failed`
-- Only valid state transitions are allowed:
-```
+- `(session_id, sequence)` unique
+- Images are immutable session inputs
 
-open       → closed | failed
-closed     → processing | failed
-processing → done | failed
+## Table: `day_schedule`
 
-```
+Purpose: current version pointer for `(user_id, schedule_date)`.
 
-**Indexes**
+Columns:
 
-- `(user_id, created_at DESC)`
-- `(state, created_at)`
-- Partial index on `(created_at)` where `state = 'closed'`
+- `user_id` bigint PK part
+- `schedule_date` date PK part
+- `current_version` integer NOT NULL (> 0)
 
-**OCR Worker Permissions**
+Rules:
 
-- READ session metadata
-- UPDATE `state` from:
-- `processing → done`
-- `processing → failed`
-- UPDATE `error` when marking `failed`
+- Worker does not update this table directly
+- Trigger updates it when `schedule_version` rows are inserted
 
-The OCR worker must **never** transition a session into `processing`.
+## Table: `schedule_version`
 
----
+Purpose: immutable schedule payload versions.
 
-## Table: capture_image
+Columns:
 
-**Purpose**  
-Stores metadata for screenshots belonging to a capture session.
+- `user_id` bigint PK part
+- `schedule_date` date PK part
+- `version` integer PK part
+- `session_id` uuid UNIQUE FK -> `capture_session.id`
+- `payload` jsonb NOT NULL (must be JSON object)
+- `payload_hash` text NOT NULL
+- `created_at` timestamptz NOT NULL
 
-Images are **ordered and immutable**.
+Rules:
 
-**Columns**
+- One `schedule_version` row per session (`session_id` unique)
+- Versioning/order constraints enforced by DB logic and triggers
 
-- `id` (uuid, PK)
-- `session_id` (uuid, FK → capture_session.id)
-- `sequence` (integer, NOT NULL)  
-Order of images within the session (1-based, immutable).
+## Worker Responsibilities (Current Phase)
 
-- `r2_key` (text, NOT NULL)  
-Object key in Cloudflare R2.
-
-- `telegram_message_id` (bigint, NULLABLE)
-
-- `created_at` (timestamptz, NOT NULL)
-
-**Constraints & Rules**
-
-- `(session_id, sequence)` is unique
-- `sequence` must be > 0
-- `r2_key` is globally unique
-- Images may only be inserted while the parent session is in state `open`
-- Images are deleted automatically if the session is deleted
-
-**Indexes**
-
-- `(session_id, created_at)`
-- Unique `(r2_key)`
-- Unique `(session_id, telegram_message_id)` when message ID is present
-
-**OCR Worker Permissions**
-
-- READ ONLY  
-- Images must be read ordered by `sequence`
-
----
-
-## Table: day_schedule
-
-**Purpose**  
-Tracks the current version number for a given user and calendar date.
-
-Acts as the **current pointer** for schedule versions.
-
-**Columns**
-
-- `user_id` (bigint, PK part)
-- `schedule_date` (date, PK part)
-- `current_version` (integer, NOT NULL)
-
-**Constraints & Rules**
-
-- `(user_id, schedule_date)` is the primary key
-- `current_version` must be > 0
-- `current_version` is monotonic and cannot decrease
-
-**OCR Worker Permissions**
-
-- WRITE via trigger only  
-- The worker must not update this table directly
-
----
-
-## Table: schedule_version
-
-**Purpose**  
-Stores **immutable parsed schedule versions** produced by OCR.
-
-Each capture session may produce **at most one** schedule version.
-
-**Columns**
-
-- `user_id` (bigint, PK part)
-- `schedule_date` (date, PK part)
-- `version` (integer, PK part)
-- `session_id` (uuid, UNIQUE, FK → capture_session.id)
-- `payload` (jsonb, NOT NULL)  
-Parsed schedule data (must be a JSON object).
-
-- `payload_hash` (text, NOT NULL)  
-Deterministic hash of normalized payload.
-
-- `created_at` (timestamptz, NOT NULL)
-
-**Constraints & Rules**
-
-- `(user_id, schedule_date, version)` is the primary key
-- Each `session_id` may appear only once
-- `version` must be:
-- `1` if no previous versions exist
-- `current_version + 1` otherwise
-- Insertion automatically updates `day_schedule.current_version`
-- Payload must be a JSON object
-- Payload hash must be non-blank
-
-**OCR Worker Permissions**
-
-- INSERT exactly one row per processed session
-- Must supply:
-- correct `user_id`
-- resolved `schedule_date`
-- correct `version`
-- `payload`
-- `payload_hash`
-
----
-
-## OCR Worker Query Summary
-
-The OCR worker is expected to:
-
-1. Select sessions where:
- - `state = 'processing'`
-2. Load all related `capture_image` rows ordered by `sequence`
-3. Download images from R2 using `r2_key`
-4. Produce exactly one `schedule_version`
-5. Transition session:
- - `processing → done` on success
- - `processing → failed` with `error` on failure
-
----
-
-## Final Rule
-
-> The database schema is **owned by SQL and enforced by triggers**.  
-> The OCR worker must assume constraints are real and violations will raise errors.
-```
-
----
+- Read session(s) in `state = 'processing'`
+- Insert one `schedule_version` stub payload
+- Mark session `done` on success
+- Mark session `failed` with `error` on failure
+- Let DB triggers manage `day_schedule`
