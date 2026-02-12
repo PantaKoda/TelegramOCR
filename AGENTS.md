@@ -142,7 +142,7 @@ Rules:
 ## Non-Negotiable Design Rules
 
 - Do NOT run OCR per image (only per session)
-- Do NOT infer grouping heuristically
+- Do NOT use ML/LLM grouping; use deterministic geometry-based grouping rules only
 - Do NOT stitch images together
 - Do NOT overwrite existing schedule versions
 - Do NOT guess dates from timestamps or filenames
@@ -174,6 +174,7 @@ If the date cannot be resolved or is inconsistent:
 - Sessions grouped and claimed atomically
 - Dispatcher transitions session into worker-claimable queue state
 - Phase 3.5 chaos-normalization worker implemented with DB lease claim (`main.py`)
+- Phase 4 pre-OCR layout parser implemented (`parser/layout_parser.py`)
 - Current worker behavior:
   - claims at most one session per run with `FOR UPDATE SKIP LOCKED`
   - claim policy: `pending` first, stale `processing` lease reclaim
@@ -192,7 +193,13 @@ If the date cannot be resolved or is inconsistent:
   - computes deterministic `payload_hash`
   - transitions `processing → done` on success and clears lease fields
   - transitions `processing → failed` with error on failure and clears lease fields
-- OCR extraction, image download, and real schedule parsing are not implemented in Phase 3.5
+- Layout parser behavior (pre-OCR):
+  - input: flat list of OCR-like boxes (`text`, `x`, `y`, `w`, `h`)
+  - deterministic pipeline: sort -> line clustering -> card grouping -> field extraction
+  - time detection via regex (`HH:MM`/`HH.MM` ranges), normalized to `HH:MM`
+  - output entry fields: `start`, `end`, `title`, `location`, `address`
+  - top chrome/header cards without time lines are ignored
+- OCR extraction and image download are not implemented yet
 
 ---
 
