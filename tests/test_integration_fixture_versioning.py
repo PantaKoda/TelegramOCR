@@ -160,12 +160,20 @@ class WorkerFixtureVersioningIntegrationTests(unittest.TestCase):
                     (session_id, self.user_id),
                 )
 
-    def _run_worker_once(self, *, worker_id: str) -> subprocess.CompletedProcess:
+    def _run_worker_once(
+        self,
+        *,
+        worker_id: str,
+        enable_chaos_parser: bool = False,
+        chaos_seed: int = 0,
+    ) -> subprocess.CompletedProcess:
         env = os.environ.copy()
         env["DATABASE_URL"] = DB_URL
         env["DB_SCHEMA"] = self.schema
         env["WORKER_ID"] = worker_id
         env["FIXTURE_PAYLOAD_PATH"] = str(self.fixture_path)
+        env["ENABLE_CHAOS_PARSER"] = "true" if enable_chaos_parser else "false"
+        env["CHAOS_SEED"] = str(chaos_seed)
         env["SIMULATED_WORK_SECONDS"] = "0"
         env["LEASE_TIMEOUT_SECONDS"] = "300"
         env["LEASE_HEARTBEAT_SECONDS"] = "10"
@@ -293,6 +301,95 @@ class WorkerFixtureVersioningIntegrationTests(unittest.TestCase):
         self.assertEqual(self._fetch_session_state(session_a), "done")
         self.assertEqual(self._fetch_session_state(session_b), "done")
         self.assertEqual(self._fetch_session_state(session_c), "done")
+
+    def test_chaos_representation_noise_does_not_create_new_versions(self) -> None:
+        schedule_date = "2026-02-10"
+        payload = {
+            "schedule_date": schedule_date,
+            "entries": [
+                {"start": "10:00", "end": "14:00", "title": "Cleaning", "location": "Billdal"},
+                {"start": "15:00", "end": "19:00", "title": "Office Shift", "location": "Molndal"},
+            ],
+        }
+        self._write_fixture(payload)
+
+        session_ids: list[str] = []
+        for seed in range(20):
+            session_id = str(uuid.uuid4())
+            session_ids.append(session_id)
+            self._seed_pending_session(session_id)
+            result = self._run_worker_once(
+                worker_id=f"it-chaos-{seed}",
+                enable_chaos_parser=True,
+                chaos_seed=seed,
+            )
+            self.assertEqual(result.returncode, 0, msg=f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}")
+            self.assertIn('"event": "session.done"', result.stdout)
+
+        versions = self._fetch_versions(schedule_date)
+        self.assertEqual(len(versions), 1)
+        self.assertEqual(versions[0]["version"], 1)
+        self.assertEqual(
+            versions[0]["payload"],
+            {
+                "schedule_date": schedule_date,
+                "entries": [
+                    {"start": "10:00", "end": "14:00", "title": "Cleaning", "location": "Billdal"},
+                    {"start": "15:00", "end": "19:00", "title": "Office Shift", "location": "Molndal"},
+                ],
+            },
+        )
+        self.assertEqual(self._fetch_current_version(schedule_date), 1)
+        for session_id in session_ids:
+            self.assertEqual(self._fetch_session_state(session_id), "done")
+
+    def test_chaos_runs_preserve_single_version_until_semantic_change(self) -> None:
+        schedule_date = "2026-02-10"
+        payload_a = {
+            "schedule_date": schedule_date,
+            "entries": [
+                {"start": "10:00", "end": "14:00", "title": "Cleaning", "location": "Billdal"},
+                {"start": "15:00", "end": "19:00", "title": "Office Shift", "location": "Molndal"},
+            ],
+        }
+        payload_b = {
+            "schedule_date": schedule_date,
+            "entries": [
+                {"start": "10:00", "end": "15:00", "title": "Cleaning", "location": "Billdal"},
+                {"start": "15:00", "end": "19:00", "title": "Office Shift", "location": "Molndal"},
+            ],
+        }
+
+        self._write_fixture(payload_a)
+        for seed in range(20):
+            self._seed_pending_session(str(uuid.uuid4()))
+            result = self._run_worker_once(
+                worker_id=f"it-chaos-a-{seed}",
+                enable_chaos_parser=True,
+                chaos_seed=seed,
+            )
+            self.assertEqual(result.returncode, 0, msg=f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}")
+
+        versions_after_a = self._fetch_versions(schedule_date)
+        self.assertEqual(len(versions_after_a), 1)
+        self.assertEqual(versions_after_a[0]["version"], 1)
+
+        self._write_fixture(payload_b)
+        for seed in range(20, 40):
+            self._seed_pending_session(str(uuid.uuid4()))
+            result = self._run_worker_once(
+                worker_id=f"it-chaos-b-{seed}",
+                enable_chaos_parser=True,
+                chaos_seed=seed,
+            )
+            self.assertEqual(result.returncode, 0, msg=f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}")
+
+        versions_after_b = self._fetch_versions(schedule_date)
+        self.assertEqual(len(versions_after_b), 2)
+        self.assertEqual([row["version"] for row in versions_after_b], [1, 2])
+        self.assertEqual(versions_after_b[0]["payload"], payload_a)
+        self.assertEqual(versions_after_b[1]["payload"], payload_b)
+        self.assertEqual(self._fetch_current_version(schedule_date), 2)
 
 
 if __name__ == "__main__":

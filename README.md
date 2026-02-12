@@ -1,15 +1,20 @@
-# OCR Worker (Phase 3 Fixture Payload)
+# OCR Worker (Phase 3.5 Chaos Normalization)
 
-Phase 3 validates deterministic payload/version mechanics before OCR:
+Phase 3.5 validates noise-tolerant versioning before OCR:
 
 - PostgreSQL connectivity
 - at-most-one session claim per run using `FOR UPDATE SKIP LOCKED`
 - lease semantics:
   - prefers `state = 'pending'`
   - reclaims stale `state = 'processing'` when lease is expired
-- fixture-driven payload write from local JSON (`fixtures/sample_schedule.json`)
-- deterministic payload hash from normalized JSON
+- fixture-driven payload input from local JSON (`fixtures/sample_schedule.json`)
+- optional deterministic chaos parser (seeded format noise)
+- canonical normalization before hashing/writes
+- deterministic payload hash from canonical normalized JSON
 - per-date version progression (`current_version + 1`, else `1`)
+- no-change dedupe: if canonical payload hash matches latest version, no new `schedule_version` is inserted
+- per-date transactional advisory lock ensures deterministic dedupe under concurrency
+- inserts use `ON CONFLICT ... DO NOTHING RETURNING` to classify create-vs-existing outcomes via DB result
 - ownership-guarded insert/finalization (`locked_by` must match claimer)
 - session transition: `processing -> done | failed`, clearing lease fields
 
@@ -35,6 +40,8 @@ Optional:
 
 - `DB_SCHEMA` (default: `schedule_ingest`)
 - `FIXTURE_PAYLOAD_PATH` (default: `fixtures/sample_schedule.json`)
+- `ENABLE_CHAOS_PARSER` (default: `false`)
+- `CHAOS_SEED` (default: `0`)
 - `WORKER_ID` (default: `worker-<pid>`)
 - `LEASE_TIMEOUT_SECONDS` (default: `300`)
 - `LEASE_HEARTBEAT_SECONDS` (default: `10`)
@@ -87,6 +94,10 @@ The worker runs one claim/process cycle and exits.
    - new `schedule_version` row inserted with incremented version
    - previous versions remain immutable
    - `day_schedule.current_version` points to latest version
+6. Noise stability check:
+   - enqueue multiple sessions with identical semantic fixture data
+   - run with `ENABLE_CHAOS_PARSER=true` and varying `CHAOS_SEED`
+   - verify `schedule_version` count for that date stays `1`
 
 ### Integration Tests
 
@@ -99,6 +110,7 @@ uv run python -m unittest tests/test_main_worker.py tests/test_integration_claim
 Coverage:
 - claim/finalize race safety (`tests/test_integration_claim_locking.py`)
 - fixture payload version timeline (`tests/test_integration_fixture_versioning.py`)
+- chaos noise does not create phantom versions (`tests/test_integration_fixture_versioning.py`)
 - unit checks for fixture parsing + insert SQL parameterization (`tests/test_main_worker.py`)
 
 ## Invariants Enforced

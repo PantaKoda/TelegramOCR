@@ -7,6 +7,8 @@ import hashlib
 import json
 import logging
 import os
+import random
+import re
 import sys
 import time
 from dataclasses import dataclass
@@ -78,6 +80,8 @@ class WorkerConfig:
     database_url: str
     db_schema: str
     fixture_payload_path: str
+    enable_chaos_parser: bool
+    chaos_seed: int
     worker_id: str
     pending_state: str
     processing_state: str
@@ -171,6 +175,16 @@ def parse_bool_env(name: str, default: bool) -> bool:
     raise RuntimeError(f"Invalid boolean for {name}: {value}")
 
 
+def parse_any_int_env(name: str, default: int) -> int:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    try:
+        return int(value)
+    except ValueError as exc:
+        raise RuntimeError(f"Invalid integer for {name}: {value}") from exc
+
+
 def load_config() -> WorkerConfig:
     database_url = getenv_first("DATABASE_URL", "POSTGRES_DSN", "TEST_DATABASE_URL")
     if not database_url:
@@ -180,6 +194,8 @@ def load_config() -> WorkerConfig:
         database_url=database_url,
         db_schema=os.getenv("DB_SCHEMA", "schedule_ingest"),
         fixture_payload_path=os.getenv("FIXTURE_PAYLOAD_PATH", DEFAULT_FIXTURE_PAYLOAD_PATH),
+        enable_chaos_parser=parse_bool_env("ENABLE_CHAOS_PARSER", False),
+        chaos_seed=parse_any_int_env("CHAOS_SEED", 0),
         worker_id=os.getenv("WORKER_ID", f"worker-{os.getpid()}"),
         pending_state=os.getenv("PENDING_STATE", "pending"),
         processing_state=os.getenv("PROCESSING_STATE", "processing"),
@@ -226,6 +242,125 @@ def parse_schedule_date(payload: dict[str, Any]) -> date:
         return date.fromisoformat(value)
     except ValueError as exc:
         raise RuntimeError(f"Invalid schedule_date in fixture payload: {value}") from exc
+
+
+def collapse_whitespace(value: str) -> str:
+    return " ".join(value.split())
+
+
+def normalize_text_field(value: Any, field_name: str) -> str:
+    if not isinstance(value, str):
+        raise RuntimeError(f"Entry field `{field_name}` must be a string.")
+    normalized = collapse_whitespace(value)
+    if not normalized:
+        raise RuntimeError(f"Entry field `{field_name}` cannot be empty.")
+    return normalized
+
+
+def normalize_time_value(value: Any, field_name: str) -> str:
+    if not isinstance(value, str):
+        raise RuntimeError(f"Entry field `{field_name}` must be a string time.")
+
+    match = re.fullmatch(r"\s*(\d{1,2})\s*[:.\s]\s*(\d{1,2})\s*", value)
+    if match is None:
+        raise RuntimeError(f"Invalid time format for `{field_name}`: {value}")
+
+    hour = int(match.group(1))
+    minute = int(match.group(2))
+    if hour < 0 or hour > 23:
+        raise RuntimeError(f"Invalid hour for `{field_name}`: {value}")
+    if minute < 0 or minute > 59:
+        raise RuntimeError(f"Invalid minute for `{field_name}`: {value}")
+    return f"{hour:02d}:{minute:02d}"
+
+
+def canonicalize_entry(entry: Any) -> dict[str, str]:
+    if not isinstance(entry, dict):
+        raise RuntimeError("Each `entries` item must be an object.")
+
+    title = normalize_text_field(entry.get("title"), "title")
+    location = normalize_text_field(entry.get("location"), "location")
+
+    return {
+        "start": normalize_time_value(entry.get("start"), "start"),
+        "end": normalize_time_value(entry.get("end"), "end"),
+        "title": title,
+        "location": location.lower().title(),
+    }
+
+
+def normalize_schedule_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    schedule_date = parse_schedule_date(payload).isoformat()
+    raw_entries = payload.get("entries")
+    if not isinstance(raw_entries, list):
+        raise RuntimeError("Fixture payload must include `entries` as a list.")
+
+    normalized_entries = [canonicalize_entry(entry) for entry in raw_entries]
+    normalized_entries.sort(key=lambda item: (item["start"], item["end"], item["title"].casefold(), item["location"].casefold()))
+
+    return {
+        "schedule_date": schedule_date,
+        "entries": normalized_entries,
+    }
+
+
+def noisy_time_format(canonical_time: str, rng: random.Random) -> str:
+    hour_str, minute_str = canonical_time.split(":")
+    hour = int(hour_str)
+    minute = int(minute_str)
+
+    variants = [
+        f"{hour:02d}:{minute:02d}",
+        f"{hour:02d}.{minute:02d}",
+        f"{hour:02d} {minute:02d}",
+        f"{hour}:{minute:02d}",
+        f"{hour:02d}:{minute}",
+    ]
+    return rng.choice(variants)
+
+
+def noisy_title(value: str, rng: random.Random) -> str:
+    parts = value.split(" ")
+    joiner = "  " if rng.random() < 0.5 else " "
+    noisy = joiner.join(parts)
+    if rng.random() < 0.7:
+        noisy = noisy + (" " * (1 + rng.randint(0, 1)))
+    if rng.random() < 0.3:
+        noisy = " " + noisy
+    return noisy
+
+
+def noisy_location(value: str, rng: random.Random) -> str:
+    case_variant = rng.choice([str.lower, str.upper, str.title])
+    base = case_variant(value)
+    parts = base.split(" ")
+    joiner = "  " if rng.random() < 0.6 else " "
+    noisy = joiner.join(parts)
+    if rng.random() < 0.5:
+        noisy = noisy + " "
+    return noisy
+
+
+def apply_chaos_parser(payload: dict[str, Any], seed: int) -> dict[str, Any]:
+    canonical = normalize_schedule_payload(payload)
+    rng = random.Random(seed)
+
+    noisy_entries: list[dict[str, str]] = []
+    for entry in canonical["entries"]:
+        noisy_entries.append(
+            {
+                "start": noisy_time_format(entry["start"], rng),
+                "end": noisy_time_format(entry["end"], rng),
+                "title": noisy_title(entry["title"], rng),
+                "location": noisy_location(entry["location"], rng),
+            }
+        )
+
+    rng.shuffle(noisy_entries)
+    return {
+        "schedule_date": canonical["schedule_date"],
+        "entries": noisy_entries,
+    }
 
 
 def capture_session_state_type(schema: str):
@@ -334,6 +469,65 @@ def get_next_schedule_version(
     return int(row["current_version"]) + 1
 
 
+def get_latest_schedule_version(
+    conn: psycopg.Connection,
+    schema: str,
+    *,
+    user_id: int,
+    schedule_date: date,
+) -> dict[str, Any] | None:
+    query = sql.SQL(
+        """
+        SELECT version, payload_hash
+        FROM {}.schedule_version
+        WHERE user_id = %s
+          AND schedule_date = %s
+        ORDER BY version DESC
+        LIMIT 1
+        FOR UPDATE
+        """
+    ).format(sql.Identifier(schema))
+
+    with conn.cursor(row_factory=dict_row) as cur:
+        cur.execute(query, (user_id, schedule_date))
+        return cur.fetchone()
+
+
+def get_schedule_version_by_hash(
+    conn: psycopg.Connection,
+    schema: str,
+    *,
+    user_id: int,
+    schedule_date: date,
+    payload_hash: str,
+) -> dict[str, Any] | None:
+    query = sql.SQL(
+        """
+        SELECT version, payload_hash
+        FROM {}.schedule_version
+        WHERE user_id = %s
+          AND schedule_date = %s
+          AND payload_hash = %s
+        ORDER BY version DESC
+        LIMIT 1
+        """
+    ).format(sql.Identifier(schema))
+
+    with conn.cursor(row_factory=dict_row) as cur:
+        cur.execute(query, (user_id, schedule_date, payload_hash))
+        return cur.fetchone()
+
+
+def advisory_lock_key(user_id: int, schedule_date: date) -> int:
+    digest = hashlib.sha256(f"{user_id}:{schedule_date.isoformat()}".encode("utf-8")).digest()
+    return int.from_bytes(digest[:8], byteorder="big", signed=True)
+
+
+def acquire_schedule_date_lock(conn: psycopg.Connection, *, user_id: int, schedule_date: date) -> None:
+    with conn.cursor() as cur:
+        cur.execute("SELECT pg_advisory_xact_lock(%s)", (advisory_lock_key(user_id, schedule_date),))
+
+
 def insert_schedule_version(
     conn: psycopg.Connection,
     schema: str,
@@ -345,7 +539,7 @@ def insert_schedule_version(
     payload_hash: str,
     processing_state: str,
     worker_id: str,
-) -> None:
+) -> int | None:
     if payload is None or not isinstance(payload, dict):
         raise ValueError("Payload must be a JSON object (dict).")
 
@@ -370,6 +564,9 @@ def insert_schedule_version(
         WHERE cs.id = %s
           AND cs.state = %s::{}
           AND cs.locked_by = %s
+        ON CONFLICT ON CONSTRAINT schedule_version_pkey
+        DO NOTHING
+        RETURNING version
         """
     ).format(
         sql.Identifier(schema),
@@ -390,8 +587,12 @@ def insert_schedule_version(
                 worker_id,
             ),
         )
-        if cur.rowcount != 1:
+        row = cur.fetchone()
+        if cur.rowcount == 0:
+            return None
+        if cur.rowcount != 1 or row is None:
             raise LeaseLostError("Lease lost before schedule_version insert.")
+        return int(row[0])
 
 
 def mark_session_done(conn: psycopg.Connection, config: WorkerConfig, session_id: str) -> None:
@@ -582,7 +783,11 @@ def perform_fixture_work(
     session: ClaimedSession,
 ) -> tuple[dict[str, Any], date, str]:
     maybe_sleep_with_heartbeat(conn, config, session)
-    payload = load_fixture_payload(config.fixture_payload_path)
+    fixture_payload = load_fixture_payload(config.fixture_payload_path)
+    parsed_payload = (
+        apply_chaos_parser(fixture_payload, config.chaos_seed) if config.enable_chaos_parser else fixture_payload
+    )
+    payload = normalize_schedule_payload(parsed_payload)
     schedule_date = parse_schedule_date(payload)
     payload_hash = make_payload_hash(payload)
     return payload, schedule_date, payload_hash
@@ -612,25 +817,56 @@ def run_once(config: WorkerConfig, logger: logging.Logger) -> int:
 
         try:
             payload, schedule_date, payload_hash = perform_fixture_work(conn, config, session)
+            inserted_version: int | None = None
+            change_detected = False
 
             with conn.transaction():
-                version = get_next_schedule_version(
+                acquire_schedule_date_lock(
+                    conn,
+                    user_id=session.user_id,
+                    schedule_date=schedule_date,
+                )
+                latest = get_latest_schedule_version(
                     conn,
                     config.db_schema,
                     user_id=session.user_id,
                     schedule_date=schedule_date,
                 )
-                insert_schedule_version(
-                    conn,
-                    config.db_schema,
-                    session=session,
-                    schedule_date=schedule_date,
-                    version=version,
-                    payload=payload,
-                    payload_hash=payload_hash,
-                    processing_state=config.processing_state,
-                    worker_id=config.worker_id,
-                )
+                if latest is not None and latest["payload_hash"] == payload_hash:
+                    inserted_version = int(latest["version"])
+                else:
+                    version = get_next_schedule_version(
+                        conn,
+                        config.db_schema,
+                        user_id=session.user_id,
+                        schedule_date=schedule_date,
+                    )
+                    inserted = insert_schedule_version(
+                        conn,
+                        config.db_schema,
+                        session=session,
+                        schedule_date=schedule_date,
+                        version=version,
+                        payload=payload,
+                        payload_hash=payload_hash,
+                        processing_state=config.processing_state,
+                        worker_id=config.worker_id,
+                    )
+                    if inserted is None:
+                        existing = get_schedule_version_by_hash(
+                            conn,
+                            config.db_schema,
+                            user_id=session.user_id,
+                            schedule_date=schedule_date,
+                            payload_hash=payload_hash,
+                        )
+                        if existing is None:
+                            raise RuntimeError("Schedule version insert skipped but matching hash row was not found.")
+                        inserted_version = int(existing["version"])
+                        change_detected = False
+                    else:
+                        inserted_version = inserted
+                        change_detected = True
                 mark_session_done(conn, config, session.id)
 
             logger.info(
@@ -641,7 +877,8 @@ def run_once(config: WorkerConfig, logger: logging.Logger) -> int:
                     "user_id": session.user_id,
                     "worker_id": config.worker_id,
                     "schedule_date": schedule_date.isoformat(),
-                    "version": version,
+                    "version": inserted_version,
+                    "change_detected": change_detected,
                     "payload_hash": payload_hash,
                 },
             )
@@ -693,8 +930,10 @@ def main() -> int:
         extra={
             "event": "worker.start",
             "db_schema": config.db_schema,
-            "mode": "phase3_fixture_payload",
+            "mode": "phase3_5_chaos_normalization",
             "fixture_payload_path": config.fixture_payload_path,
+            "enable_chaos_parser": config.enable_chaos_parser,
+            "chaos_seed": config.chaos_seed,
             "worker_id": config.worker_id,
             "lease_timeout_seconds": config.lease_timeout_seconds,
             "lease_heartbeat_seconds": config.lease_heartbeat_seconds,
