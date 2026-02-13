@@ -1,9 +1,10 @@
-# OCR Worker (Phase 3.5 Worker + Phase 5 OCR Adapter)
+# OCR Worker (Phase 3.5 Worker + Phase 5 OCR Adapter + Phase 6 Semantics)
 
 Current state:
 
 - Phase 3.5 worker validates noise-tolerant versioning before OCR (`main.py`)
 - Phase 5 adds real PaddleOCR box extraction adapter + golden sample tests (`ocr/paddle_adapter.py`)
+- Phase 6 adds deterministic semantic normalization utilities (`parser/semantic_normalizer.py`)
 
 Phase 3.5 worker capabilities:
 
@@ -35,6 +36,21 @@ Phase 5 adapter capabilities (not yet wired into `main.py` DB write path):
   - `use_textline_orientation=False`
 - conversion only: Paddle polygons/text/scores -> box geometry (`x`, `y`, `w`, `h`) + confidence
 - no adapter-side filtering/grouping/normalization; parser remains source of layout grouping truth
+
+Phase 6 semantic normalization capabilities (module-level, deterministic):
+
+- normalize parsed entries into canonical shift fields:
+  - `customer_name`, `street`, `street_number`, `postal_code`, `postal_area`, `city`, `shift_type`
+- Swedish-oriented address decomposition heuristics:
+  - postal code pattern `NNN NN`
+  - street + house number extraction
+  - trailing city/place normalization
+- title/customer cleanup:
+  - collapse whitespace
+  - normalize case/diacritics
+  - remove common company suffix noise tokens (`AB`, `HB`, `Städservice`)
+- deterministic shift classification tags:
+  - `SCHOOL`, `OFFICE`, `HOME_VISIT`, `UNKNOWN`
 
 ## Setup
 
@@ -154,6 +170,12 @@ Uses real screenshot fixtures and verifies:
 
 ```bash
 PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK=true uv run python -m unittest tests/test_paddle_adapter.py tests/test_ocr_golden_samples.py
+```
+
+### Semantic Normalizer Tests (No DB)
+
+```bash
+uv run python -m unittest tests/test_semantic_normalizer.py
 ```
 
 ## Invariants Enforced
