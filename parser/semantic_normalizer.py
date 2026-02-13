@@ -7,6 +7,7 @@ import unicodedata
 from dataclasses import dataclass
 from typing import Any
 
+from parser.entity_identity import customer_fingerprint, location_fingerprint
 from parser.layout_parser import Entry
 
 POSTAL_CODE_RE = re.compile(r"\b(\d{3})\s?(\d{2})\b")
@@ -19,11 +20,13 @@ class CanonicalShift:
     start: str
     end: str
     customer_name: str
+    customer_fingerprint: str
     street: str
     street_number: str
     postal_code: str
     postal_area: str
     city: str
+    location_fingerprint: str
     shift_type: str
 
 
@@ -41,16 +44,25 @@ def normalize_entry(entry: Entry | dict[str, Any]) -> CanonicalShift:
     customer_name = _normalize_customer_name(normalized.title)
     address = _decompose_address(normalized.address, normalized.location)
     shift_type = _classify_shift(normalized, address)
+    location_key = location_fingerprint(
+        street=address.street,
+        street_number=address.street_number,
+        postal_area=address.postal_area,
+        city=address.city,
+    )
+    customer_key = customer_fingerprint(customer_name)
 
     return CanonicalShift(
         start=_normalize_time(normalized.start, "start"),
         end=_normalize_time(normalized.end, "end"),
         customer_name=customer_name,
+        customer_fingerprint=customer_key,
         street=address.street,
         street_number=address.street_number,
         postal_code=address.postal_code,
         postal_area=address.postal_area,
         city=address.city,
+        location_fingerprint=location_key,
         shift_type=shift_type,
     )
 
@@ -244,4 +256,3 @@ def _title_token(token: str) -> str:
 
 def _collapse_whitespace(value: str) -> str:
     return " ".join(value.split())
-

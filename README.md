@@ -1,10 +1,11 @@
-# OCR Worker (Phase 3.5 Worker + Phase 5 OCR Adapter + Phase 6 Semantics)
+# OCR Worker (Phase 3.5 Worker + Phase 5 OCR Adapter + Phase 6/6.5 Semantics)
 
 Current state:
 
 - Phase 3.5 worker validates noise-tolerant versioning before OCR (`main.py`)
 - Phase 5 adds real PaddleOCR box extraction adapter + golden sample tests (`ocr/paddle_adapter.py`)
 - Phase 6 adds deterministic semantic normalization utilities (`parser/semantic_normalizer.py`)
+- Phase 6.5 adds deterministic entity fingerprinting (`parser/entity_identity.py`)
 
 Phase 3.5 worker capabilities:
 
@@ -51,6 +52,20 @@ Phase 6 semantic normalization capabilities (module-level, deterministic):
   - remove common company suffix noise tokens (`AB`, `HB`, `Städservice`)
 - deterministic shift classification tags:
   - `SCHOOL`, `OFFICE`, `HOME_VISIT`, `UNKNOWN`
+- identity fields included in canonical shift output:
+  - `location_fingerprint`
+  - `customer_fingerprint`
+
+Phase 6.5 identity fingerprinting capabilities:
+
+- location identity key built from semantic location fields:
+  - normalized `street`, `street_number`, and (`postal_area` or `city`)
+- customer identity key built from normalized name tokens:
+  - company suffix noise removed
+  - token order stabilized by surname + initials
+- OCR confusion tolerance in keys:
+  - accent stripping, case/whitespace collapse
+  - `0/O` and `1/l/I` canonicalization
 
 ## Setup
 
@@ -176,6 +191,12 @@ PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK=true uv run python -m unittest tests/test_
 
 ```bash
 uv run python -m unittest tests/test_semantic_normalizer.py
+```
+
+### Entity Identity Tests (No DB)
+
+```bash
+uv run python -m unittest tests/test_entity_identity.py
 ```
 
 ## Invariants Enforced
