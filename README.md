@@ -21,7 +21,9 @@ Phase 3.5 worker capabilities:
 - lease semantics:
   - prefers `state = 'closed'`
   - reclaims stale `state = 'processing'` when lease is expired
-- fixture-driven payload input from local JSON (`fixtures/sample_schedule.json`)
+- runtime-selectable input source:
+  - `fixture` mode from local JSON (`fixtures/sample_schedule.json`)
+  - `ocr` mode from session images in R2 (PaddleOCR + deterministic layout/semantic parsing)
 - optional deterministic chaos parser (seeded format noise)
 - canonical normalization before hashing/writes
 - deterministic payload hash from canonical normalized JSON
@@ -187,6 +189,9 @@ Phase 13 background runtime capabilities:
   - run one lifecycle iteration
   - sleep `WORKER_POLL_SECONDS`
   - repeat forever
+- selectable runtime input mode:
+  - `WORKER_INPUT_MODE=fixture` (dev/testing, local JSON payload)
+  - `WORKER_INPUT_MODE=ocr` (production, R2 download + PaddleOCR + parser pipeline)
 - resilient operation:
   - per-iteration exception handling with stdout logging
   - process continues after errors
@@ -251,7 +256,9 @@ psql "$DATABASE_URL" -f database/migrations/20260213_add_schedule_notifications.
 Optional:
 
 - `DB_SCHEMA` (default: `schedule_ingest`)
+- `WORKER_INPUT_MODE` (default: `fixture`; set `ocr` for real screenshot processing)
 - `FIXTURE_PAYLOAD_PATH` (default: `fixtures/sample_schedule.json`)
+- `OCR_DEFAULT_YEAR` (optional fallback year if OCR date text omits year, e.g. `2026`)
 - `WORKER_POLL_SECONDS` (default: `5`)
 - `WORKER_IDLE_LOG_EVERY` (default: `12`, log every N idle iterations; first idle iteration is always logged)
 - `ENABLE_CHAOS_PARSER` (default: `false`)
@@ -268,6 +275,12 @@ Optional:
 - `PROCESSED_STATE` (default: `done`)
 - `DONE_STATE` (default: `done`)
 - `FAILED_STATE` (default: `failed`)
+- `R2_ENDPOINT_URL` (required when `WORKER_INPUT_MODE=ocr`)
+- `R2_ACCESS_KEY_ID` (required when `WORKER_INPUT_MODE=ocr`)
+- `R2_SECRET_ACCESS_KEY` (required when `WORKER_INPUT_MODE=ocr`)
+- `R2_BUCKET` (required when `WORKER_INPUT_MODE=ocr`)
+- `R2_REGION` (default: `auto`)
+- `R2_KEY_PREFIX` (optional object-key prefix)
 - `PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK` (optional, recommended: `True` for container runtime)
 
 ## Fixture Payload Contract
@@ -334,8 +347,13 @@ Run:
 ```bash
 docker run --rm \
   -e DATABASE_URL="$DATABASE_URL" \
+  -e WORKER_INPUT_MODE=ocr \
   -e WORKER_POLL_SECONDS=5 \
   -e SESSION_IDLE_TIMEOUT_SECONDS=25 \
+  -e R2_ENDPOINT_URL="$R2_ENDPOINT_URL" \
+  -e R2_ACCESS_KEY_ID="$R2_ACCESS_KEY_ID" \
+  -e R2_SECRET_ACCESS_KEY="$R2_SECRET_ACCESS_KEY" \
+  -e R2_BUCKET="$R2_BUCKET" \
   -e PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK=True \
   telegram-ocr-worker:latest
 ```

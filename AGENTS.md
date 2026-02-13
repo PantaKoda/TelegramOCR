@@ -180,12 +180,15 @@ If the date cannot be resolved or is inconsistent:
   - sets lease fields (`locked_at`, `locked_by`) on claim
   - refreshes lease heartbeat via `locked_at` while processing long-running work
   - guards heartbeat/finalization with `locked_by` ownership checks
-  - loads deterministic JSON fixture payload from disk
+  - supports runtime-selectable input mode via `WORKER_INPUT_MODE`:
+    - `fixture`: deterministic JSON fixture payload from disk
+    - `ocr`: R2 image download + PaddleOCR + deterministic layout/semantic parsing
   - optional seeded chaos parser introduces deterministic representation noise (format/casing/whitespace/order)
   - canonicalizes payload before hashing/persistence (time/text normalization + deterministic entry ordering)
   - serializes per `(user_id, schedule_date)` writes with transactional advisory lock
   - insert path uses `ON CONFLICT ... DO NOTHING RETURNING` to classify created vs existing row
-  - requires fixture payload field `schedule_date` (ISO date string)
+  - `fixture` mode requires fixture payload field `schedule_date` (ISO date string)
+  - `ocr` mode resolves `schedule_date` from OCR UI date text (with optional `OCR_DEFAULT_YEAR` fallback when year is omitted)
   - computes next version per `(user_id, schedule_date)` from `day_schedule`
   - inserts one immutable `schedule_version` row only when canonical payload changed
   - when canonical payload hash matches latest version, marks session done without inserting new version
@@ -287,7 +290,7 @@ If the date cannot be resolved or is inconsistent:
   - iteration error logs include:
     - `error.type`, `error.message`, `error.stage` (`ocr|layout|diff|db|lifecycle`)
   - persists notifications via `infra/notification_store.py` after successful session processing
-  - runtime remains deterministic and fixture-driven for payload generation (`FIXTURE_PAYLOAD_PATH`)
+  - runtime input mode is environment-driven (`WORKER_INPUT_MODE=fixture|ocr`) to support dev/prod switching without code changes
   - Docker runtime added (`Dockerfile`) with `python:3.11-slim` base and `uv sync --frozen` dependency install
 
 ---

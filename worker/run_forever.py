@@ -5,11 +5,15 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import sys
+import tempfile
 import time
+import unicodedata
 from dataclasses import dataclass, replace
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
+from statistics import median
 from typing import Any
 
 import psycopg
@@ -18,6 +22,7 @@ from psycopg.rows import dict_row
 
 from domain import schedule_diff
 from domain.notification_rules import UserNotification, build_notifications
+from domain.session_aggregate import aggregate_session_shifts
 from domain.session_lifecycle import (
     SessionLifecycleConfig,
     load_lifecycle_config_from_env,
@@ -26,10 +31,70 @@ from domain.session_lifecycle import (
 )
 from infra.event_store import load_day_snapshot, process_observation
 from infra.notification_store import persist_notifications
+from ocr.paddle_adapter import create_paddle_ocr, run_paddle_on_image
+from parser.layout_parser import parse_layout
 from parser.semantic_normalizer import CanonicalShift, normalize_entries
 
 DEFAULT_FIXTURE_PAYLOAD_PATH = "fixtures/sample_schedule.json"
 SERVICE_NAME = "python-worker"
+INPUT_MODE_FIXTURE = "fixture"
+INPUT_MODE_OCR = "ocr"
+
+DATE_WITH_WEEKDAY_RE = re.compile(r"\b([A-Za-zÅÄÖåäö]+)\s+(\d{1,2})\s+([A-Za-zÅÄÖåäö]+)(?:\s+(\d{4}))?\b")
+DATE_DAY_MONTH_RE = re.compile(r"\b(\d{1,2})\s+([A-Za-zÅÄÖåäö]+)(?:\s+(\d{4}))?\b")
+
+WEEKDAY_NAMES = {
+    "monday",
+    "tuesday",
+    "wednesday",
+    "thursday",
+    "friday",
+    "saturday",
+    "sunday",
+    "mandag",
+    "tisdag",
+    "onsdag",
+    "torsdag",
+    "fredag",
+    "lordag",
+    "sondag",
+}
+
+MONTH_MAP = {
+    "jan": 1,
+    "january": 1,
+    "januari": 1,
+    "feb": 2,
+    "february": 2,
+    "februari": 2,
+    "mar": 3,
+    "march": 3,
+    "mars": 3,
+    "apr": 4,
+    "april": 4,
+    "may": 5,
+    "maj": 5,
+    "jun": 6,
+    "june": 6,
+    "juni": 6,
+    "jul": 7,
+    "july": 7,
+    "juli": 7,
+    "aug": 8,
+    "august": 8,
+    "augusti": 8,
+    "sep": 9,
+    "sept": 9,
+    "september": 9,
+    "oct": 10,
+    "october": 10,
+    "okt": 10,
+    "oktober": 10,
+    "nov": 11,
+    "november": 11,
+    "dec": 12,
+    "december": 12,
+}
 
 
 class JsonFormatter(logging.Formatter):
@@ -86,7 +151,20 @@ class WorkerRuntimeConfig:
     poll_seconds: float
     fixture_payload_path: str
     summary_threshold: int
+    input_mode: str
+    ocr_default_year: int | None
+    r2_config: "R2Config | None"
     idle_log_every: int = 12
+
+
+@dataclass(frozen=True)
+class R2Config:
+    endpoint_url: str
+    access_key_id: str
+    secret_access_key: str
+    bucket: str
+    region: str
+    key_prefix: str
 
 
 class WorkerStageError(RuntimeError):
@@ -116,6 +194,9 @@ def load_runtime_config() -> WorkerRuntimeConfig:
     poll_seconds = _parse_positive_float_env("WORKER_POLL_SECONDS", 5.0)
     summary_threshold = _parse_positive_int_env("NOTIFICATION_SUMMARY_THRESHOLD", 3)
     idle_log_every = _parse_positive_int_env("WORKER_IDLE_LOG_EVERY", 12)
+    input_mode = _parse_input_mode(os.getenv("WORKER_INPUT_MODE", INPUT_MODE_FIXTURE))
+    ocr_default_year = _parse_optional_int_env("OCR_DEFAULT_YEAR")
+    r2_config = _load_r2_config() if input_mode == INPUT_MODE_OCR else None
 
     return WorkerRuntimeConfig(
         database_url=database_url,
@@ -123,6 +204,9 @@ def load_runtime_config() -> WorkerRuntimeConfig:
         poll_seconds=poll_seconds,
         fixture_payload_path=os.getenv("FIXTURE_PAYLOAD_PATH", DEFAULT_FIXTURE_PAYLOAD_PATH),
         summary_threshold=summary_threshold,
+        input_mode=input_mode,
+        ocr_default_year=ocr_default_year,
+        r2_config=r2_config,
         idle_log_every=idle_log_every,
     )
 
@@ -136,6 +220,8 @@ def run_iteration(
 ) -> dict[str, int]:
     stored_notification_count = 0
     session_context: dict[str, dict[str, Any]] = {}
+    ocr_client: Any | None = None
+    r2_client: Any | None = None
     iteration_now = utc_now()
     skipped_idle_count = _count_sessions_waiting_for_idle(
         conn,
@@ -187,32 +273,100 @@ def run_iteration(
         return rows
 
     def run_full_pipeline(images: list[dict[str, Any]]) -> dict[str, Any]:
+        nonlocal ocr_client
+        nonlocal r2_client
         session_id = str(images[0].get("session_id", "")) if images else ""
         context = session_context.get(session_id, {"user_id": None, "correlation_id": session_id or None})
-        try:
-            fixture_payload = _load_fixture_payload(config.fixture_payload_path)
-            entries = _coerce_fixture_entries(fixture_payload)
-        except Exception as error:
-            raise WorkerStageError("ocr", "Failed loading OCR payload.", cause=error) from error
+        if config.input_mode == INPUT_MODE_FIXTURE:
+            try:
+                fixture_payload = _load_fixture_payload(config.fixture_payload_path)
+                entries = _coerce_fixture_entries(fixture_payload)
+            except Exception as error:
+                raise WorkerStageError("ocr", "Failed loading OCR payload.", cause=error) from error
 
-        logger.info(
-            "OCR stage completed",
-            extra={
-                "event": "ocr.completed",
-                "session_id": session_id or None,
-                "user_id": context["user_id"],
-                "correlation_id": context["correlation_id"],
-                "text_block_count": len(entries),
-                "mode": "fixture",
-            },
-        )
+            logger.info(
+                "OCR stage completed",
+                extra={
+                    "event": "ocr.completed",
+                    "session_id": session_id or None,
+                    "user_id": context["user_id"],
+                    "correlation_id": context["correlation_id"],
+                    "text_block_count": len(entries),
+                    "mode": INPUT_MODE_FIXTURE,
+                },
+            )
 
-        try:
-            schedule_date = _parse_schedule_date(fixture_payload)
-            canonical_shifts = normalize_entries(entries)
+            try:
+                schedule_date = _parse_schedule_date(fixture_payload)
+                canonical_shifts = normalize_entries(entries)
+                canonical_shifts.sort(key=_canonical_shift_sort_key)
+            except Exception as error:
+                raise WorkerStageError("layout", "Failed layout/semantic normalization.", cause=error) from error
+        else:
+            if config.r2_config is None:
+                raise WorkerStageError("ocr", "WORKER_INPUT_MODE=ocr requires R2 configuration.")
+            if ocr_client is None:
+                try:
+                    ocr_client = create_paddle_ocr()
+                except Exception as error:
+                    raise WorkerStageError("ocr", "Failed creating PaddleOCR client.", cause=error) from error
+            if r2_client is None:
+                try:
+                    r2_client = _create_r2_client(config.r2_config)
+                except Exception as error:
+                    raise WorkerStageError("ocr", "Failed creating R2 client.", cause=error) from error
+
+            image_shifts: list[list[CanonicalShift]] = []
+            image_dates: list[date] = []
+            total_boxes = 0
+
+            for image in images:
+                key = str(image.get("r2_key", "") or "")
+                if not key:
+                    raise WorkerStageError("ocr", f"Session {session_id} image is missing r2_key.")
+                try:
+                    image_bytes = _download_r2_object(r2_client, config.r2_config, key)
+                except Exception as error:
+                    raise WorkerStageError("ocr", f"Failed downloading R2 object: {key}", cause=error) from error
+
+                suffix = Path(key).suffix or ".png"
+                try:
+                    with tempfile.NamedTemporaryFile(suffix=suffix) as temp_image:
+                        temp_image.write(image_bytes)
+                        temp_image.flush()
+                        boxes = run_paddle_on_image(temp_image.name, ocr=ocr_client)
+                except Exception as error:
+                    raise WorkerStageError("ocr", f"Failed OCR on image: {key}", cause=error) from error
+
+                total_boxes += len(boxes)
+                try:
+                    image_date = _extract_schedule_date_from_boxes(boxes, default_year=config.ocr_default_year)
+                    layout_entries = parse_layout(boxes)
+                    canonical = normalize_entries(layout_entries)
+                    canonical.sort(key=_canonical_shift_sort_key)
+                except Exception as error:
+                    raise WorkerStageError("layout", f"Failed layout parsing for image: {key}", cause=error) from error
+
+                image_dates.append(image_date)
+                image_shifts.append(canonical)
+
+            schedule_date = _ensure_single_schedule_date(image_dates)
+            aggregated = aggregate_session_shifts(image_shifts, schedule_date=schedule_date.isoformat())
+            canonical_shifts = [item.shift for item in aggregated.shifts]
             canonical_shifts.sort(key=_canonical_shift_sort_key)
-        except Exception as error:
-            raise WorkerStageError("layout", "Failed layout/semantic normalization.", cause=error) from error
+
+            logger.info(
+                "OCR stage completed",
+                extra={
+                    "event": "ocr.completed",
+                    "session_id": session_id or None,
+                    "user_id": context["user_id"],
+                    "correlation_id": context["correlation_id"],
+                    "text_block_count": total_boxes,
+                    "image_count": len(images),
+                    "mode": INPUT_MODE_OCR,
+                },
+            )
 
         logger.info(
             "Layout shifts detected",
@@ -417,6 +571,8 @@ def run_forever() -> None:
             "poll_seconds": config.poll_seconds,
             "idle_timeout_seconds": lifecycle_config.idle_timeout_seconds,
             "idle_log_every": config.idle_log_every,
+            "input_mode": config.input_mode,
+            "ocr_default_year": config.ocr_default_year,
             "open_state": lifecycle_config.open_state,
             "processing_state": lifecycle_config.processing_state,
             "processed_state": lifecycle_config.processed_state,
@@ -555,6 +711,195 @@ def _parse_positive_int_env(name: str, default: int) -> int:
     if parsed <= 0:
         raise RuntimeError(f"{name} must be > 0.")
     return parsed
+
+
+def _parse_optional_int_env(name: str) -> int | None:
+    value = os.getenv(name)
+    if value is None or not value.strip():
+        return None
+    try:
+        return int(value)
+    except ValueError as error:
+        raise RuntimeError(f"{name} must be an integer.") from error
+
+
+def _parse_input_mode(value: str) -> str:
+    normalized = value.strip().lower()
+    if normalized in {INPUT_MODE_FIXTURE, INPUT_MODE_OCR}:
+        return normalized
+    raise RuntimeError(f"WORKER_INPUT_MODE must be one of: {INPUT_MODE_FIXTURE}, {INPUT_MODE_OCR}.")
+
+
+def _load_r2_config() -> R2Config:
+    endpoint_url = _get_required_env("R2_ENDPOINT_URL", "S3_ENDPOINT_URL")
+    access_key_id = _get_required_env("R2_ACCESS_KEY_ID", "AWS_ACCESS_KEY_ID")
+    secret_access_key = _get_required_env("R2_SECRET_ACCESS_KEY", "AWS_SECRET_ACCESS_KEY")
+    bucket = _get_required_env("R2_BUCKET", "R2_BUCKET_NAME", "S3_BUCKET")
+    region = os.getenv("R2_REGION", "auto")
+    key_prefix = os.getenv("R2_KEY_PREFIX", "")
+    return R2Config(
+        endpoint_url=endpoint_url,
+        access_key_id=access_key_id,
+        secret_access_key=secret_access_key,
+        bucket=bucket,
+        region=region,
+        key_prefix=key_prefix,
+    )
+
+
+def _get_required_env(*names: str) -> str:
+    for name in names:
+        value = os.getenv(name)
+        if value is not None and value.strip():
+            return value.strip()
+    joined = ", ".join(names)
+    raise RuntimeError(f"Missing required environment variable (one of: {joined}).")
+
+
+def _create_r2_client(config: R2Config) -> Any:
+    try:
+        import boto3  # type: ignore
+    except ModuleNotFoundError as error:
+        raise RuntimeError("Missing dependency `boto3`. Run `uv sync` and rebuild the worker image.") from error
+
+    return boto3.client(
+        "s3",
+        endpoint_url=config.endpoint_url,
+        aws_access_key_id=config.access_key_id,
+        aws_secret_access_key=config.secret_access_key,
+        region_name=config.region,
+    )
+
+
+def _download_r2_object(client: Any, config: R2Config, key: str) -> bytes:
+    resolved_key = _resolve_r2_key(key, config.key_prefix)
+    response = client.get_object(Bucket=config.bucket, Key=resolved_key)
+    body = response.get("Body")
+    if body is None:
+        raise RuntimeError(f"R2 object body missing for key: {resolved_key}")
+    return bytes(body.read())
+
+
+def _resolve_r2_key(key: str, key_prefix: str) -> str:
+    normalized_key = key.strip().lstrip("/")
+    if not key_prefix:
+        return normalized_key
+    prefix = key_prefix.strip().strip("/")
+    if not prefix:
+        return normalized_key
+    if normalized_key.startswith(prefix + "/") or normalized_key == prefix:
+        return normalized_key
+    return f"{prefix}/{normalized_key}"
+
+
+def _extract_schedule_date_from_boxes(boxes: list[Any], *, default_year: int | None) -> date:
+    texts = _extract_date_candidate_texts(boxes)
+    for text in texts:
+        parsed = _parse_schedule_date_from_text(text, default_year=default_year)
+        if parsed is not None:
+            return parsed
+    raise RuntimeError("Could not resolve schedule date from OCR UI text.")
+
+
+def _extract_date_candidate_texts(boxes: list[Any]) -> list[str]:
+    normalized_boxes: list[dict[str, Any]] = []
+    for box in boxes:
+        text = str(getattr(box, "text", ""))
+        cleaned = " ".join(text.split())
+        if not cleaned:
+            continue
+        try:
+            x = float(getattr(box, "x", 0.0))
+            y = float(getattr(box, "y", 0.0))
+            h = float(getattr(box, "h", 0.0))
+        except (TypeError, ValueError):
+            x = 0.0
+            y = 0.0
+            h = 0.0
+        normalized_boxes.append({"text": cleaned, "x": x, "y": y, "h": max(h, 1.0)})
+
+    if not normalized_boxes:
+        return []
+
+    normalized_boxes.sort(key=lambda item: (item["y"], item["x"]))
+    candidates = [item["text"] for item in normalized_boxes]
+
+    # Build line candidates so split OCR tokens on one date line can still be parsed.
+    line_threshold = max(8.0, median(item["h"] for item in normalized_boxes) * 0.6)
+    current_line: list[dict[str, Any]] = []
+    current_center = 0.0
+    line_texts: list[str] = []
+    for item in normalized_boxes:
+        center = item["y"] + (item["h"] / 2.0)
+        if not current_line:
+            current_line = [item]
+            current_center = center
+            continue
+        if abs(center - current_center) <= line_threshold:
+            current_line.append(item)
+            current_center = (current_center * (len(current_line) - 1) + center) / len(current_line)
+            continue
+        line_texts.append(" ".join(part["text"] for part in sorted(current_line, key=lambda value: value["x"])))
+        current_line = [item]
+        current_center = center
+    if current_line:
+        line_texts.append(" ".join(part["text"] for part in sorted(current_line, key=lambda value: value["x"])))
+
+    return [*line_texts, *candidates]
+
+
+def _parse_schedule_date_from_text(text: str, *, default_year: int | None) -> date | None:
+    for match in DATE_WITH_WEEKDAY_RE.finditer(text):
+        weekday_token = _normalize_date_token(match.group(1))
+        if weekday_token not in WEEKDAY_NAMES:
+            continue
+        resolved = _build_date_from_parts(match.group(2), match.group(3), match.group(4), default_year=default_year)
+        if resolved is not None:
+            return resolved
+
+    for match in DATE_DAY_MONTH_RE.finditer(text):
+        resolved = _build_date_from_parts(match.group(1), match.group(2), match.group(3), default_year=default_year)
+        if resolved is not None:
+            return resolved
+    return None
+
+
+def _build_date_from_parts(day_value: str, month_value: str, year_value: str | None, *, default_year: int | None) -> date | None:
+    month_key = _normalize_date_token(month_value)
+    month = MONTH_MAP.get(month_key)
+    if month is None:
+        return None
+    try:
+        day = int(day_value)
+    except ValueError:
+        return None
+    try:
+        year = default_year if year_value is None else int(year_value)
+    except ValueError:
+        return None
+    if year is None:
+        raise RuntimeError("Date text is missing year and OCR_DEFAULT_YEAR is not configured.")
+    try:
+        return date(year, month, day)
+    except ValueError:
+        return None
+
+
+def _normalize_date_token(value: str) -> str:
+    collapsed = " ".join(value.split())
+    normalized = unicodedata.normalize("NFKD", collapsed)
+    without_marks = "".join(char for char in normalized if not unicodedata.combining(char))
+    return without_marks.lower()
+
+
+def _ensure_single_schedule_date(values: list[date]) -> date:
+    unique = sorted(set(values))
+    if not unique:
+        raise RuntimeError("No schedule date detected from OCR output.")
+    if len(unique) > 1:
+        rendered = ", ".join(value.isoformat() for value in unique)
+        raise RuntimeError(f"Inconsistent schedule dates detected across session images: {rendered}")
+    return unique[0]
 
 
 def _should_log_idle_iteration(idle_iteration_streak: int, idle_log_every: int) -> bool:
