@@ -86,6 +86,7 @@ class WorkerRuntimeConfig:
     poll_seconds: float
     fixture_payload_path: str
     summary_threshold: int
+    idle_log_every: int = 12
 
 
 class WorkerStageError(RuntimeError):
@@ -114,6 +115,7 @@ def load_runtime_config() -> WorkerRuntimeConfig:
 
     poll_seconds = _parse_positive_float_env("WORKER_POLL_SECONDS", 5.0)
     summary_threshold = _parse_positive_int_env("NOTIFICATION_SUMMARY_THRESHOLD", 3)
+    idle_log_every = _parse_positive_int_env("WORKER_IDLE_LOG_EVERY", 12)
 
     return WorkerRuntimeConfig(
         database_url=database_url,
@@ -121,6 +123,7 @@ def load_runtime_config() -> WorkerRuntimeConfig:
         poll_seconds=poll_seconds,
         fixture_payload_path=os.getenv("FIXTURE_PAYLOAD_PATH", DEFAULT_FIXTURE_PAYLOAD_PATH),
         summary_threshold=summary_threshold,
+        idle_log_every=idle_log_every,
     )
 
 
@@ -407,25 +410,46 @@ def run_forever() -> None:
             "db_schema": config.db_schema,
             "poll_seconds": config.poll_seconds,
             "idle_timeout_seconds": lifecycle_config.idle_timeout_seconds,
+            "idle_log_every": config.idle_log_every,
         },
     )
 
+    idle_iteration_streak = 0
     while True:
-        logger.info("Lifecycle iteration started", extra={"event": "worker.iteration.start"})
+        logger.debug("Lifecycle iteration started", extra={"event": "worker.iteration.start"})
         try:
             with psycopg.connect(config.database_url) as conn:
                 with conn.transaction():
                     result = run_iteration(conn, config, lifecycle_config, logger=logger)
-            logger.info(
-                "Lifecycle iteration finished",
-                extra={
-                    "event": "worker.iteration.finish",
-                    "processed_sessions": result["processed_sessions"],
-                    "generated_notifications": result["generated_notifications"],
-                    "stored_notifications": result["stored_notifications"],
-                },
+            has_activity = (
+                result["processed_sessions"] > 0
+                or result["generated_notifications"] > 0
+                or result["stored_notifications"] > 0
             )
+            if has_activity:
+                idle_iteration_streak = 0
+                logger.info(
+                    "Lifecycle iteration finished",
+                    extra={
+                        "event": "worker.iteration.finish",
+                        "processed_sessions": result["processed_sessions"],
+                        "generated_notifications": result["generated_notifications"],
+                        "stored_notifications": result["stored_notifications"],
+                    },
+                )
+            else:
+                idle_iteration_streak += 1
+                if _should_log_idle_iteration(idle_iteration_streak, config.idle_log_every):
+                    logger.info(
+                        "Lifecycle iteration idle",
+                        extra={
+                            "event": "worker.iteration.idle",
+                            "idle_iteration_streak": idle_iteration_streak,
+                            "poll_seconds": config.poll_seconds,
+                        },
+                    )
         except Exception as error:
+            idle_iteration_streak = 0
             stage = error.stage if isinstance(error, WorkerStageError) else "lifecycle"
             logger.exception(
                 "Lifecycle iteration failed",
@@ -522,6 +546,14 @@ def _parse_positive_int_env(name: str, default: int) -> int:
     if parsed <= 0:
         raise RuntimeError(f"{name} must be > 0.")
     return parsed
+
+
+def _should_log_idle_iteration(idle_iteration_streak: int, idle_log_every: int) -> bool:
+    if idle_iteration_streak <= 0:
+        return False
+    if idle_iteration_streak == 1:
+        return True
+    return idle_iteration_streak % idle_log_every == 0
 
 
 def _load_fixture_payload(path: str) -> dict[str, Any]:

@@ -14,6 +14,7 @@ from domain.session_lifecycle import SessionLifecycleConfig
 from worker.run_forever import (
     JsonFormatter,
     WorkerRuntimeConfig,
+    _should_log_idle_iteration,
     _coerce_fixture_entries,
     _parse_schedule_date,
     load_runtime_config,
@@ -35,6 +36,7 @@ class RunForeverConfigTests(unittest.TestCase):
         self.assertEqual(config.db_schema, "schedule_ingest")
         self.assertEqual(config.poll_seconds, 5.0)
         self.assertEqual(config.summary_threshold, 3)
+        self.assertEqual(config.idle_log_every, 12)
         self.assertEqual(config.fixture_payload_path, "fixtures/sample_schedule.json")
 
     def test_load_runtime_config_parses_custom_values(self) -> None:
@@ -43,6 +45,7 @@ class RunForeverConfigTests(unittest.TestCase):
             "DB_SCHEMA": "custom_schema",
             "WORKER_POLL_SECONDS": "2.5",
             "NOTIFICATION_SUMMARY_THRESHOLD": "5",
+            "WORKER_IDLE_LOG_EVERY": "4",
             "FIXTURE_PAYLOAD_PATH": "/tmp/fixture.json",
         }
         with patch.dict(os.environ, env, clear=True):
@@ -50,6 +53,7 @@ class RunForeverConfigTests(unittest.TestCase):
         self.assertEqual(config.db_schema, "custom_schema")
         self.assertEqual(config.poll_seconds, 2.5)
         self.assertEqual(config.summary_threshold, 5)
+        self.assertEqual(config.idle_log_every, 4)
         self.assertEqual(config.fixture_payload_path, "/tmp/fixture.json")
 
     def test_load_runtime_config_requires_database_url(self) -> None:
@@ -64,6 +68,15 @@ class RunForeverConfigTests(unittest.TestCase):
         }
         with patch.dict(os.environ, env, clear=True):
             with self.assertRaisesRegex(RuntimeError, "WORKER_POLL_SECONDS"):
+                load_runtime_config()
+
+    def test_load_runtime_config_rejects_non_positive_idle_log_every(self) -> None:
+        env = {
+            "DATABASE_URL": "postgresql://user:pass@localhost:5432/db",
+            "WORKER_IDLE_LOG_EVERY": "0",
+        }
+        with patch.dict(os.environ, env, clear=True):
+            with self.assertRaisesRegex(RuntimeError, "WORKER_IDLE_LOG_EVERY"):
                 load_runtime_config()
 
 
@@ -90,6 +103,12 @@ class RunForeverLoggingTests(unittest.TestCase):
         self.assertEqual(payload["user_id"], 123)
         self.assertEqual(payload["correlation_id"], "session-1")
         self.assertTrue(payload["timestamp"].endswith("Z"))
+
+    def test_should_log_idle_iteration(self) -> None:
+        self.assertFalse(_should_log_idle_iteration(0, 12))
+        self.assertTrue(_should_log_idle_iteration(1, 12))
+        self.assertFalse(_should_log_idle_iteration(2, 12))
+        self.assertTrue(_should_log_idle_iteration(12, 12))
 
 
 class RunForeverFixtureParsingTests(unittest.TestCase):
