@@ -200,7 +200,57 @@ class SessionAggregateTests(unittest.TestCase):
         self.assertEqual(result.shifts[0].shift.start, "15:00")
         self.assertEqual(result.shifts[0].shift.end, "17:00")
 
+    def test_cross_midnight_jitter_is_merged(self) -> None:
+        first = _shift(
+            start="23:55",
+            end="00:30",
+            customer_name="Night Visit",
+            street="Nattgatan",
+            street_number="5",
+            city="Goteborg",
+        )
+        second = _shift(
+            start="23:50",
+            end="00:35",
+            customer_name="Night Visit",
+            street="Nattgatan",
+            street_number="5",
+            city="Goteborg",
+        )
+
+        result = aggregate_session_shifts([[first], [second]], schedule_date="2026-08-22")
+
+        self.assertEqual(len(result.shifts), 1)
+        self.assertEqual(result.shifts[0].source_count, 2)
+        self.assertEqual(result.shifts[0].shift.start, "23:50")
+        self.assertEqual(result.shifts[0].shift.end, "00:35")
+
+    def test_partial_time_observation_is_merged_when_contained(self) -> None:
+        complete = _shift(
+            start="10:00",
+            end="14:00",
+            customer_name="Pia Lindkvist",
+            street="Kyrkogatan",
+            street_number="3",
+            city="Molndal",
+        )
+        # Represents an OCR cut-off line such as "10:00-" that degrades to a point-time observation.
+        partial = _shift(
+            start="10:00",
+            end="10:00",
+            customer_name="Pia Lindkvist",
+            street="Kyrkogatan",
+            street_number="3",
+            city="Molndal",
+        )
+
+        result = aggregate_session_shifts([[complete], [partial]], schedule_date="2026-08-22")
+
+        self.assertEqual(len(result.shifts), 1)
+        self.assertEqual(result.shifts[0].source_count, 2)
+        self.assertEqual(result.shifts[0].shift.start, "10:00")
+        self.assertEqual(result.shifts[0].shift.end, "14:00")
+
 
 if __name__ == "__main__":
     unittest.main()
-

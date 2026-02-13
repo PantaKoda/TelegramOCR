@@ -130,13 +130,13 @@ def _best_cluster_for_shift(clusters: list[_Cluster], shift: CanonicalShift, *, 
 
     for index, cluster in enumerate(clusters):
         distance = _time_distance_minutes(cluster.shift, shift)
-        if distance > tolerance:
-            continue
-        key = (
-            _minutes(cluster.shift.start),
-            _minutes(cluster.shift.end),
-            cluster.shift.customer_fingerprint,
+        contains = (
+            cluster.shift.customer_fingerprint == shift.customer_fingerprint
+            and (_range_contains(cluster.shift, shift) or _range_contains(shift, cluster.shift))
         )
+        if distance > tolerance and not contains:
+            continue
+        key = _cluster_match_priority_key(cluster.shift, shift, distance=distance, tolerance=tolerance)
         if (
             best_distance is None
             or distance < best_distance
@@ -150,8 +150,11 @@ def _best_cluster_for_shift(clusters: list[_Cluster], shift: CanonicalShift, *, 
 
 
 def _merge_shift(base: CanonicalShift, incoming: CanonicalShift) -> CanonicalShift:
-    start_minutes = min(_minutes(base.start), _minutes(incoming.start))
-    end_minutes = max(_minutes(base.end), _minutes(incoming.end))
+    anchor = _minutes(base.start)
+    base_start, base_end = _unwrap_interval(base, anchor_minutes=anchor)
+    incoming_start, incoming_end = _unwrap_interval(incoming, anchor_minutes=anchor)
+    start_minutes = min(base_start, incoming_start)
+    end_minutes = max(base_end, incoming_end)
 
     selected_customer_name = _select_better_customer_name(base.customer_name, incoming.customer_name)
     selected_customer_fingerprint = customer_fingerprint(selected_customer_name)
@@ -174,8 +177,8 @@ def _merge_shift(base: CanonicalShift, incoming: CanonicalShift) -> CanonicalShi
     selected_shift_type = _select_shift_type(base.shift_type, incoming.shift_type)
 
     return CanonicalShift(
-        start=_from_minutes(start_minutes),
-        end=_from_minutes(end_minutes),
+        start=_from_minutes_mod(start_minutes),
+        end=_from_minutes_mod(end_minutes),
         customer_name=selected_customer_name,
         customer_fingerprint=selected_customer_fingerprint,
         street=selected_street,
@@ -230,7 +233,74 @@ def _extract_notes(shift: CanonicalShift) -> tuple[str, ...]:
 
 
 def _time_distance_minutes(left: CanonicalShift, right: CanonicalShift) -> int:
-    return abs(_minutes(left.start) - _minutes(right.start)) + abs(_minutes(left.end) - _minutes(right.end))
+    return _clock_distance(_minutes(left.start), _minutes(right.start)) + _clock_distance(
+        _minutes(left.end), _minutes(right.end)
+    )
+
+
+def _range_contains(container: CanonicalShift, candidate: CanonicalShift) -> bool:
+    container_start = _minutes(container.start)
+    candidate_start = _minutes(candidate.start)
+    container_duration = _duration_minutes(container)
+    candidate_duration = _duration_minutes(candidate)
+
+    if container_duration < candidate_duration:
+        return False
+
+    start_distance = _clockwise_distance(container_start, candidate_start)
+    if start_distance > container_duration:
+        return False
+
+    if candidate_duration == 0:
+        return True
+
+    candidate_end = _minutes(candidate.end)
+    end_distance = _clockwise_distance(container_start, candidate_end)
+    return end_distance <= container_duration
+
+
+def _duration_minutes(shift: CanonicalShift) -> int:
+    start = _minutes(shift.start)
+    end = _minutes(shift.end)
+    return (end - start) % 1440
+
+
+def _cluster_match_priority_key(
+    cluster_shift: CanonicalShift,
+    incoming_shift: CanonicalShift,
+    *,
+    distance: int,
+    tolerance: int,
+) -> tuple:
+    by_distance = 0 if distance <= tolerance else 1
+    return (
+        by_distance,
+        distance,
+        _minutes(cluster_shift.start),
+        _minutes(cluster_shift.end),
+        cluster_shift.customer_fingerprint,
+        incoming_shift.customer_fingerprint,
+    )
+
+
+def _unwrap_interval(shift: CanonicalShift, *, anchor_minutes: int) -> tuple[int, int]:
+    start = _unwrap_minutes_near(_minutes(shift.start), anchor_minutes=anchor_minutes)
+    duration = _duration_minutes(shift)
+    return start, start + duration
+
+
+def _unwrap_minutes_near(value: int, *, anchor_minutes: int) -> int:
+    candidates = (value - 1440, value, value + 1440)
+    return min(candidates, key=lambda candidate: (abs(candidate - anchor_minutes), candidate))
+
+
+def _clock_distance(left: int, right: int) -> int:
+    diff = abs(left - right)
+    return min(diff, 1440 - diff)
+
+
+def _clockwise_distance(start: int, point: int) -> int:
+    return (point - start) % 1440
 
 
 def _minutes(value: str) -> int:
@@ -238,9 +308,10 @@ def _minutes(value: str) -> int:
     return int(hour_text) * 60 + int(minute_text)
 
 
-def _from_minutes(total: int) -> str:
-    hour = total // 60
-    minute = total % 60
+def _from_minutes_mod(total: int) -> str:
+    normalized = total % 1440
+    hour = normalized // 60
+    minute = normalized % 60
     return f"{hour:02d}:{minute:02d}"
 
 
@@ -249,4 +320,3 @@ def _validate_schedule_date(value: str) -> None:
         date.fromisoformat(value)
     except ValueError as exc:
         raise ValueError(f"Invalid schedule_date: {value}") from exc
-

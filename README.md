@@ -90,6 +90,8 @@ Phase 8 session aggregation capabilities:
 - merge key within session:
   - same `location_fingerprint`
   - time distance `<= 5` minutes (`|start_old-start_new| + |end_old-end_new|`)
+- time distance is circular over 24h to support cross-midnight shifts
+- containment fallback: merge partial observations when one time range contains the other (same identity)
 - merge policy:
   - keep earliest start
   - keep latest end

@@ -230,6 +230,8 @@ If the date cannot be resolved or is inconsistent:
   - deterministic session aggregator in `domain/session_aggregate.py`
   - input shape: `list[list[CanonicalShift]]` (one list per screenshot in the same capture session)
   - shifts merge when `location_fingerprint` matches and time distance is within tolerance (default 5 minutes)
+  - time distance uses circular 24h math so cross-midnight observations merge correctly
+  - containment fallback merges partial time observations when one range fully contains the other and identity matches
   - merge policy keeps earliest start and latest end, prefers longer address fields, preserves identity keys, and tracks per-shift `source_count`
   - output shape: `AggregatedDaySchedule` with deduplicated `AggregatedShift` entries
   - tests in `tests/test_session_aggregate.py` cover overlap dedupe, partial coverage union, jitter merge, same-time different-location separation, and triple-observation dedupe
