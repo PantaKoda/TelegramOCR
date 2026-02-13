@@ -265,7 +265,7 @@ If the date cannot be resolved or is inconsistent:
   - atomic finalize gate: `open_state -> processing_state` only when session is still open
   - deterministic once-per-session processing helper: finalizable scan -> finalize -> process callbacks -> processed-state mark
   - processed transition is ownership-safe at SQL update level by requiring `processing_state` at update time
-  - per-session processing exceptions now transition `processing -> failed` within the same lifecycle pass to prevent infinite retry loops on irrecoverable OCR/runtime errors
+  - per-session processing exceptions now transition `processing -> failed` within the same lifecycle pass, persisting an error message on `capture_session.error` to satisfy DB constraints and prevent infinite retry loops on irrecoverable OCR/runtime errors
   - tests in `tests/test_session_lifecycle.py` cover: not-finalized-while-active, idle-finalizable transition, finalize race safety, and single notification emission across reruns
 - Phase 12 notification persistence (pre-Telegram delivery wiring):
   - infrastructure module in `infra/notification_store.py`

@@ -79,7 +79,19 @@ class SessionLifecycleIntegrationTests(unittest.TestCase):
                         id UUID PRIMARY KEY,
                         user_id BIGINT NOT NULL,
                         state TEXT NOT NULL,
-                        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                        closed_at TIMESTAMPTZ NULL,
+                        error TEXT NULL,
+                        CONSTRAINT capture_session_closed_at_state_chk CHECK (
+                            (state = 'open' AND closed_at IS NULL)
+                            OR
+                            (state <> 'open' AND closed_at IS NOT NULL)
+                        ),
+                        CONSTRAINT capture_session_error_failed_chk CHECK (
+                            (state = 'failed' AND error IS NOT NULL)
+                            OR
+                            (state <> 'failed' AND error IS NULL)
+                        )
                     )
                     """
                 )
@@ -97,14 +109,15 @@ class SessionLifecycleIntegrationTests(unittest.TestCase):
 
     def _seed_session(self, *, state: str = "closed", user_id: int = 8225717176) -> str:
         session_id = str(uuid.uuid4())
+        closed_at = None if state == "open" else datetime.now(timezone.utc)
         with psycopg.connect(DB_URL, autocommit=True) as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     f"""
-                    INSERT INTO {self.schema}.capture_session (id, user_id, state)
-                    VALUES (%s, %s, %s)
+                    INSERT INTO {self.schema}.capture_session (id, user_id, state, closed_at, error)
+                    VALUES (%s, %s, %s, %s, %s)
                     """,
-                    (session_id, user_id, state),
+                    (session_id, user_id, state, closed_at, None),
                 )
         return session_id
 
