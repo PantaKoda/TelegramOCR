@@ -254,6 +254,7 @@ If the date cannot be resolved or is inconsistent:
 - Phase 11 session lifecycle finalization gate (pre-worker wiring):
   - deterministic lifecycle module in `domain/session_lifecycle.py`
   - detects finalizable sessions by idle timeout from latest image timestamp (`MAX(capture_image.created_at)`)
+  - idle timeout is environment-configurable via `SESSION_IDLE_TIMEOUT_SECONDS` (default: `25`)
   - lifecycle query requires at least one image and a configurable `open_state` (default: `pending` for current DB contract)
   - atomic finalize gate: `open_state -> processing_state` only when session is still open
   - deterministic once-per-session processing helper: finalizable scan -> finalize -> process callbacks -> processed-state mark

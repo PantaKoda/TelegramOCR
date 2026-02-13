@@ -189,6 +189,7 @@ Optional:
 - `LEASE_HEARTBEAT_SECONDS` (default: `10`)
 - `ENABLE_LEASE_HEARTBEAT` (default: `true`)
 - `SIMULATED_WORK_SECONDS` (default: `0`, test hook)
+- `SESSION_IDLE_TIMEOUT_SECONDS` (default: `25`, used by `domain/session_lifecycle.py`)
 - `PENDING_STATE` (default: `pending`)
 - `PROCESSING_STATE` (default: `processing`)
 - `DONE_STATE` (default: `done`)

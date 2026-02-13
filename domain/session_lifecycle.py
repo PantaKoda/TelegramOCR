@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Any, Callable
+from typing import Any, Callable, Mapping
 
 from psycopg import sql
 from psycopg.rows import dict_row
@@ -16,6 +17,32 @@ class SessionLifecycleConfig:
     open_state: str = "pending"
     processing_state: str = "processing"
     processed_state: str = "done"
+
+
+def load_lifecycle_config_from_env(
+    default: SessionLifecycleConfig | None = None,
+    *,
+    env: Mapping[str, str] | None = None,
+) -> SessionLifecycleConfig:
+    base = default or SessionLifecycleConfig()
+    source = env or os.environ
+    raw_timeout = source.get("SESSION_IDLE_TIMEOUT_SECONDS")
+    if raw_timeout is None:
+        return base
+
+    try:
+        idle_timeout_seconds = int(raw_timeout)
+    except ValueError as error:
+        raise ValueError("SESSION_IDLE_TIMEOUT_SECONDS must be an integer.") from error
+    if idle_timeout_seconds < 0:
+        raise ValueError("SESSION_IDLE_TIMEOUT_SECONDS must be >= 0.")
+
+    return SessionLifecycleConfig(
+        idle_timeout_seconds=idle_timeout_seconds,
+        open_state=base.open_state,
+        processing_state=base.processing_state,
+        processed_state=base.processed_state,
+    )
 
 
 def find_finalizable_sessions(
@@ -161,4 +188,3 @@ def _validate_now(value: datetime) -> None:
 
 def utc_now() -> datetime:
     return datetime.now(timezone.utc)
-

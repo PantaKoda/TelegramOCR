@@ -12,10 +12,29 @@ from domain.session_lifecycle import (
     SessionLifecycleConfig,
     finalize_session,
     find_finalizable_sessions,
+    load_lifecycle_config_from_env,
     run_lifecycle_once,
 )
 
 DB_URL = os.getenv("TEST_DATABASE_URL") or os.getenv("DATABASE_URL")
+
+
+class SessionLifecycleConfigTests(unittest.TestCase):
+    def test_loads_idle_timeout_from_env(self) -> None:
+        config = load_lifecycle_config_from_env(env={"SESSION_IDLE_TIMEOUT_SECONDS": "45"})
+        self.assertEqual(config.idle_timeout_seconds, 45)
+
+    def test_uses_default_when_env_is_missing(self) -> None:
+        config = load_lifecycle_config_from_env()
+        self.assertEqual(config.idle_timeout_seconds, 25)
+
+    def test_rejects_invalid_idle_timeout_value(self) -> None:
+        with self.assertRaisesRegex(ValueError, "must be an integer"):
+            load_lifecycle_config_from_env(env={"SESSION_IDLE_TIMEOUT_SECONDS": "abc"})
+
+    def test_rejects_negative_idle_timeout(self) -> None:
+        with self.assertRaisesRegex(ValueError, "must be >= 0"):
+            load_lifecycle_config_from_env(env={"SESSION_IDLE_TIMEOUT_SECONDS": "-1"})
 
 
 @unittest.skipUnless(DB_URL, "Integration test requires TEST_DATABASE_URL or DATABASE_URL")
@@ -203,4 +222,3 @@ class SessionLifecycleIntegrationTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-
