@@ -131,20 +131,23 @@ def mark_session_failed(
     schema: str,
     session_id: str,
     *,
+    error: str,
     config: SessionLifecycleConfig | None = None,
 ) -> bool:
     lifecycle = config or SessionLifecycleConfig()
+    error_message = (error or "").strip() or "Session processing failed."
     query = sql.SQL(
         """
         UPDATE {}.capture_session
-        SET state = %s
+        SET state = %s,
+            error = %s
         WHERE id = %s
           AND state::text = %s
         """
     ).format(sql.Identifier(schema))
 
     with conn.cursor() as cur:
-        cur.execute(query, (lifecycle.failed_state, session_id, lifecycle.processing_state))
+        cur.execute(query, (lifecycle.failed_state, error_message, session_id, lifecycle.processing_state))
         return cur.rowcount == 1
 
 
@@ -217,7 +220,7 @@ def run_lifecycle_once(
                 ),
             )
         except Exception as error:
-            marked_failed = mark_session_failed(conn, schema, session_id, config=lifecycle)
+            marked_failed = mark_session_failed(conn, schema, session_id, error=str(error), config=lifecycle)
             if on_session_failed is not None:
                 on_session_failed(session_id, error, marked_failed)
             continue
