@@ -1,4 +1,4 @@
-# OCR Worker (Phase 3.5 Worker + Phase 5 OCR Adapter + Phase 6/6.5 Semantics + Phase 7 Diff + Phase 8 Aggregation + Phase 9 Event Store + Phase 10 Notifications)
+# OCR Worker (Phase 3.5 Worker + Phase 5 OCR Adapter + Phase 6/6.5 Semantics + Phase 7 Diff + Phase 8 Aggregation + Phase 9 Event Store + Phase 10 Notifications + Phase 11 Lifecycle Gate)
 
 Current state:
 
@@ -10,6 +10,7 @@ Current state:
 - Phase 8 adds deterministic multi-image session aggregation (`domain/session_aggregate.py`)
 - Phase 9 adds durable event/snapshot persistence (`infra/event_store.py`)
 - Phase 10 adds deterministic event-to-human notification rules (`domain/notification_rules.py`)
+- Phase 11 adds deterministic idle/finalization lifecycle gating (`domain/session_lifecycle.py`)
 
 Phase 3.5 worker capabilities:
 
@@ -139,6 +140,21 @@ Phase 10 notification-rule capabilities:
   - if event count for same `(user_id, date, source_session)` reaches threshold (default `3`), emits one summary notification
 - replay dedupe:
   - supports `already_notified_event_ids` filter so reruns do not produce duplicate notifications
+
+Phase 11 session-lifecycle capabilities (module-level, pre-worker wiring):
+
+- detects finalizable sessions when:
+  - session is in configurable `open_state` (default: `pending`)
+  - session has at least one image
+  - `now - max(capture_image.created_at) >= idle_timeout_seconds` (default: `25s`)
+- finalization gate is atomic:
+  - `open_state -> processing_state` only if row is still open
+- provides deterministic one-cycle runner:
+  - `find_finalizable_sessions -> finalize_session -> process_finalized_session`
+- processing helper emits notifications once and advances state to configurable processed state (default: `done`)
+- race-safe behavior:
+  - concurrent finalizers on the same session result in one winner
+  - rerun after processed state emits no additional notifications
 
 ## Setup
 
@@ -302,6 +318,14 @@ uv run python -m unittest tests/test_event_store.py
 
 ```bash
 uv run python -m unittest tests/test_notification_rules.py
+```
+
+### Session Lifecycle Tests (DB Integration)
+
+Requires `TEST_DATABASE_URL` or `DATABASE_URL`:
+
+```bash
+uv run python -m unittest tests/test_session_lifecycle.py
 ```
 
 ## Invariants Enforced
