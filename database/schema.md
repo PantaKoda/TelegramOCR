@@ -103,6 +103,50 @@ Rules:
 - One `schedule_version` row per session (`session_id` unique)
 - Versioning/order constraints enforced by DB logic and triggers
 
+## Table: `day_snapshot` (Phase 9)
+
+Purpose: latest canonical day state for `(user_id, schedule_date)` used as diff baseline.
+
+Columns:
+
+- `user_id` bigint PK part
+- `schedule_date` date PK part
+- `snapshot_payload` jsonb NOT NULL (array of canonical shifts)
+- `source_session_id` uuid NOT NULL
+- `updated_at` timestamptz NOT NULL
+
+Rules:
+
+- Upserted once per processed observation session
+- Stores meaning-level canonical shifts, not raw OCR output
+- Used to compute new events against prior known day state
+
+## Table: `schedule_event` (Phase 9)
+
+Purpose: immutable event history derived from schedule diffs.
+
+Columns:
+
+- `event_id` uuid PK
+- `user_id` bigint NOT NULL
+- `schedule_date` date NOT NULL
+- `event_type` text NOT NULL
+- `location_fingerprint` text NOT NULL
+- `customer_fingerprint` text NOT NULL
+- `old_value` jsonb NULL
+- `new_value` jsonb NULL
+- `detected_at` timestamptz NOT NULL
+- `source_session_id` uuid NOT NULL
+
+Allowed `event_type` values:
+
+- `shift_added`
+- `shift_removed`
+- `shift_time_changed`
+- `shift_relocated`
+- `shift_retitled`
+- `shift_reclassified`
+
 ## Worker Responsibilities (Current Phase)
 
 - Claim one session with `FOR UPDATE SKIP LOCKED` and lease rules
@@ -123,3 +167,11 @@ Rules:
 - Mark session `done` on success
 - Mark session `failed` with `error` on failure
 - Let DB triggers manage `day_schedule`
+
+## Event Store Responsibilities (Phase 9)
+
+- Load previous day snapshot from `day_snapshot`
+- Compute semantic diff against new canonical observation
+- Persist immutable `schedule_event` rows
+- Upsert latest day snapshot in `day_snapshot`
+- Keep event payloads semantic (old/new canonical shift values), not raw OCR text

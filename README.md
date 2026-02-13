@@ -1,4 +1,4 @@
-# OCR Worker (Phase 3.5 Worker + Phase 5 OCR Adapter + Phase 6/6.5 Semantics + Phase 7 Diff + Phase 8 Aggregation)
+# OCR Worker (Phase 3.5 Worker + Phase 5 OCR Adapter + Phase 6/6.5 Semantics + Phase 7 Diff + Phase 8 Aggregation + Phase 9 Event Store)
 
 Current state:
 
@@ -8,6 +8,7 @@ Current state:
 - Phase 6.5 adds deterministic entity fingerprinting (`parser/entity_identity.py`)
 - Phase 7 adds deterministic schedule change detection (`domain/schedule_diff.py`)
 - Phase 8 adds deterministic multi-image session aggregation (`domain/session_aggregate.py`)
+- Phase 9 adds durable event/snapshot persistence (`infra/event_store.py`)
 
 Phase 3.5 worker capabilities:
 
@@ -82,6 +83,7 @@ Phase 7 change-detection capabilities:
   - `ShiftTimeChanged`
   - `ShiftRelocated`
   - `ShiftRetitled`
+  - `ShiftReclassified`
 - order-insensitive: pure reorder of unchanged shifts emits no events
 
 Phase 8 session aggregation capabilities:
@@ -100,6 +102,23 @@ Phase 8 session aggregation capabilities:
   - keep best available customer naming/fingerprint consistency
 - output: `AggregatedDaySchedule` with deduplicated `AggregatedShift` items and per-shift `source_count`
 
+Phase 9 event-store capabilities:
+
+- persists diff output as immutable event rows:
+  - `shift_added`
+  - `shift_removed`
+  - `shift_time_changed`
+  - `shift_relocated`
+  - `shift_retitled`
+  - `shift_reclassified`
+- stores semantic old/new values per event (canonical shift payloads)
+- stores event identity anchors:
+  - `location_fingerprint`
+  - `customer_fingerprint`
+- upserts latest day snapshot state for future diff baselines
+- supports pipeline step:
+  - load previous snapshot -> diff -> persist events -> update snapshot
+
 ## Setup
 
 ```bash
@@ -110,6 +129,12 @@ Apply DB lease migration (once per environment):
 
 ```bash
 psql "$DATABASE_URL" -f database/migrations/20260212_add_session_leases.sql
+```
+
+Apply event history migration (Phase 9):
+
+```bash
+psql "$DATABASE_URL" -f database/migrations/20260213_add_schedule_event_history.sql
 ```
 
 ## Required Environment Variables
@@ -242,6 +267,14 @@ uv run python -m unittest tests/test_schedule_diff.py
 
 ```bash
 uv run python -m unittest tests/test_session_aggregate.py
+```
+
+### Event Store Tests (DB Integration)
+
+Requires `TEST_DATABASE_URL` or `DATABASE_URL`:
+
+```bash
+uv run python -m unittest tests/test_event_store.py
 ```
 
 ## Invariants Enforced

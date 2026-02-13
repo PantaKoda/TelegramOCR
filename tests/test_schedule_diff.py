@@ -2,6 +2,7 @@ import unittest
 
 from domain.schedule_diff import (
     ShiftAdded,
+    ShiftReclassified,
     ShiftRelocated,
     ShiftRemoved,
     ShiftRetitled,
@@ -130,6 +131,33 @@ class ScheduleDiffTests(unittest.TestCase):
         self.assertEqual(events[0].before.end, "10:00")
         self.assertEqual(events[0].after.start, "09:00")
         self.assertEqual(events[0].after.end, "11:00")
+
+    def test_shift_reclassified_when_type_changes_only(self) -> None:
+        before = _shift(
+            start="10:00",
+            end="12:00",
+            customer_name="Office Shift",
+            street="Kontorsgatan",
+            street_number="8",
+            city="Molndal",
+            shift_type="OFFICE",
+        )
+        after = _shift(
+            start="10:00",
+            end="12:00",
+            customer_name="Office Shift",
+            street="Kontorsgatan",
+            street_number="8",
+            city="Molndal",
+            shift_type="HOME_VISIT",
+        )
+
+        events = diff_schedules([before], [after], schedule_date="2026-08-22")
+
+        self.assertEqual(len(events), 1)
+        self.assertIsInstance(events[0], ShiftReclassified)
+        self.assertEqual(events[0].before.shift_type, "OFFICE")
+        self.assertEqual(events[0].after.shift_type, "HOME_VISIT")
 
 
 if __name__ == "__main__":
