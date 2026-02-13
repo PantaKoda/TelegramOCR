@@ -218,6 +218,13 @@ If the date cannot be resolved or is inconsistent:
   - OCR confusion normalization in fingerprinting (`0/O`, `1/l/I`, accents, whitespace/case)
   - `customer_fingerprint` from normalized customer tokens with company-noise removal and order-insensitive initial folding
   - identity tests in `tests/test_entity_identity.py` (address variants, city typo confusion, different address separation, customer spelling variants)
+- Phase 7 schedule diff (domain-level interpretation):
+  - deterministic diff engine in `domain/schedule_diff.py`
+  - compares canonical shifts across versions using identity-first matching (`location_fingerprint`, `customer_fingerprint`, `schedule_date`)
+  - emits typed change events: `ShiftAdded`, `ShiftRemoved`, `ShiftTimeChanged`, `ShiftRelocated`, `ShiftRetitled`
+  - event detection stages separate identity/time/relocation/retitle concerns to reduce false positives from ordering noise
+  - order-only changes do not emit events
+  - tests in `tests/test_schedule_diff.py` cover add/remove/time-change/relocation/retitle/reorder cases
 - Worker runtime is still fixture-driven (`main.py`); OCR adapter is validated separately and not yet used for DB write path
 
 ---
