@@ -161,9 +161,12 @@ Phase 12 notification-store capabilities (infrastructure persistence):
 
 - persists user-facing notifications in `schedule_notification`
 - writes deterministic notification IDs from Phase 10 as idempotent primary keys
+- persists delivery state fields for bot handoff:
+  - `status` (`pending`, `sent`, `failed`)
+  - `sent_at` (nullable)
 - supports both dataclass and dict notification payload inputs
 - stores normalized envelope fields:
-  - `notification_id`, `user_id`, `schedule_date`, `source_session_id`
+  - `notification_id`, `user_id`, `schedule_date`, `source_session_id`, `status`
   - `notification_type`, `message`, `event_ids`, `created_at`
 - lifecycle wiring supports:
   - `events -> build_notifications(events) -> store_notifications(notifications)`

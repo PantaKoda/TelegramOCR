@@ -46,6 +46,7 @@ class NotificationStoreIntegrationTests(unittest.TestCase):
                         user_id BIGINT NOT NULL,
                         schedule_date DATE NOT NULL,
                         source_session_id UUID NOT NULL,
+                        status TEXT NOT NULL DEFAULT 'pending',
                         notification_type TEXT NOT NULL,
                         message TEXT NOT NULL,
                         event_ids JSONB NOT NULL,
@@ -60,7 +61,7 @@ class NotificationStoreIntegrationTests(unittest.TestCase):
             with conn.cursor(row_factory=dict_row) as cur:
                 cur.execute(
                     f"""
-                    SELECT notification_id, user_id, schedule_date, notification_type, message, event_ids
+                    SELECT notification_id, user_id, schedule_date, status, notification_type, message, event_ids, sent_at
                     FROM {self.schema}.schedule_notification
                     ORDER BY created_at ASC, notification_id ASC
                     """
@@ -88,6 +89,8 @@ class NotificationStoreIntegrationTests(unittest.TestCase):
         self.assertEqual(len(rows), 2)
         self.assertEqual(rows[0]["notification_id"], "n-1")
         self.assertEqual(rows[1]["notification_id"], "n-2")
+        self.assertEqual(rows[0]["status"], "pending")
+        self.assertEqual(rows[0]["sent_at"], None)
         self.assertEqual(rows[1]["event_ids"], ["evt-2", "evt-3"])
 
     def test_persist_notifications_is_idempotent_by_notification_id(self) -> None:

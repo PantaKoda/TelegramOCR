@@ -10,6 +10,8 @@ from psycopg import sql
 
 from domain.notification_rules import UserNotification
 
+NOTIFICATION_STATUS_PENDING = "pending"
+
 
 def persist_notifications(
     conn: Any,
@@ -30,12 +32,13 @@ def persist_notifications(
             user_id,
             schedule_date,
             source_session_id,
+            status,
             notification_type,
             message,
             event_ids,
             created_at
         )
-        VALUES (%s, %s, %s, %s, %s, %s, %s::jsonb, %s)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s)
         ON CONFLICT (notification_id)
         DO NOTHING
         """
@@ -51,6 +54,7 @@ def persist_notifications(
                     item.user_id,
                     item.schedule_date,
                     item.source_session_id,
+                    NOTIFICATION_STATUS_PENDING,
                     item.notification_type,
                     item.message,
                     json.dumps(list(item.event_ids), separators=(",", ":"), ensure_ascii=False),

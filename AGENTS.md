@@ -263,6 +263,7 @@ If the date cannot be resolved or is inconsistent:
 - Phase 12 notification persistence (pre-Telegram delivery wiring):
   - infrastructure module in `infra/notification_store.py`
   - persists deterministic Phase 10 notifications to `schedule_notification`
+  - notification rows include delivery state fields (`status`: `pending|sent|failed`, `sent_at`: nullable timestamp)
   - idempotency enforced by deterministic `notification_id` primary key + conflict-ignore insert behavior
   - lifecycle orchestration supports callback flow:
     - `events -> build_notifications(events) -> store_notifications(notifications)`
