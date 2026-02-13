@@ -251,6 +251,15 @@ If the date cannot be resolved or is inconsistent:
   - supports per-day/session summary suppression to avoid notification storms (default threshold: 3 changes)
   - supports replay dedupe via `already_notified_event_ids` so repeated event fetches do not re-notify
   - tests in `tests/test_notification_rules.py` cover single-event messaging, summary mode, no-change output, and replay dedupe
+- Phase 11 session lifecycle finalization gate (pre-worker wiring):
+  - deterministic lifecycle module in `domain/session_lifecycle.py`
+  - detects finalizable sessions by idle timeout from latest image timestamp (`MAX(capture_image.created_at)`)
+  - idle timeout is environment-configurable via `SESSION_IDLE_TIMEOUT_SECONDS` (default: `25`)
+  - lifecycle query requires at least one image and a configurable `open_state` (default: `pending` for current DB contract)
+  - atomic finalize gate: `open_state -> processing_state` only when session is still open
+  - deterministic once-per-session processing helper: finalizable scan -> finalize -> process callbacks -> processed-state mark
+  - processed transition is ownership-safe at SQL update level by requiring `processing_state` at update time
+  - tests in `tests/test_session_lifecycle.py` cover: not-finalized-while-active, idle-finalizable transition, finalize race safety, and single notification emission across reruns
 - Worker runtime is still fixture-driven (`main.py`); OCR adapter is validated separately and not yet used for DB write path
 
 ---
