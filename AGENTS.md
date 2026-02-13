@@ -226,6 +226,13 @@ If the date cannot be resolved or is inconsistent:
   - event detection stages separate identity/time/relocation/retitle concerns to reduce false positives from ordering noise
   - order-only changes do not emit events
   - tests in `tests/test_schedule_diff.py` cover add/remove/time-change/relocation/retitle/reorder cases
+- Phase 8 session aggregation (domain-level observation merge):
+  - deterministic session aggregator in `domain/session_aggregate.py`
+  - input shape: `list[list[CanonicalShift]]` (one list per screenshot in the same capture session)
+  - shifts merge when `location_fingerprint` matches and time distance is within tolerance (default 5 minutes)
+  - merge policy keeps earliest start and latest end, prefers longer address fields, preserves identity keys, and tracks per-shift `source_count`
+  - output shape: `AggregatedDaySchedule` with deduplicated `AggregatedShift` entries
+  - tests in `tests/test_session_aggregate.py` cover overlap dedupe, partial coverage union, jitter merge, same-time different-location separation, and triple-observation dedupe
 - Worker runtime is still fixture-driven (`main.py`); OCR adapter is validated separately and not yet used for DB write path
 
 ---

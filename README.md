@@ -1,4 +1,4 @@
-# OCR Worker (Phase 3.5 Worker + Phase 5 OCR Adapter + Phase 6/6.5 Semantics + Phase 7 Diff)
+# OCR Worker (Phase 3.5 Worker + Phase 5 OCR Adapter + Phase 6/6.5 Semantics + Phase 7 Diff + Phase 8 Aggregation)
 
 Current state:
 
@@ -7,6 +7,7 @@ Current state:
 - Phase 6 adds deterministic semantic normalization utilities (`parser/semantic_normalizer.py`)
 - Phase 6.5 adds deterministic entity fingerprinting (`parser/entity_identity.py`)
 - Phase 7 adds deterministic schedule change detection (`domain/schedule_diff.py`)
+- Phase 8 adds deterministic multi-image session aggregation (`domain/session_aggregate.py`)
 
 Phase 3.5 worker capabilities:
 
@@ -82,6 +83,20 @@ Phase 7 change-detection capabilities:
   - `ShiftRelocated`
   - `ShiftRetitled`
 - order-insensitive: pure reorder of unchanged shifts emits no events
+
+Phase 8 session aggregation capabilities:
+
+- input: `list[list[CanonicalShift]]` (one shift list per screenshot in same capture session)
+- merge key within session:
+  - same `location_fingerprint`
+  - time distance `<= 5` minutes (`|start_old-start_new| + |end_old-end_new|`)
+- merge policy:
+  - keep earliest start
+  - keep latest end
+  - preserve location identity
+  - prefer longer address fields
+  - keep best available customer naming/fingerprint consistency
+- output: `AggregatedDaySchedule` with deduplicated `AggregatedShift` items and per-shift `source_count`
 
 ## Setup
 
@@ -219,6 +234,12 @@ uv run python -m unittest tests/test_entity_identity.py
 
 ```bash
 uv run python -m unittest tests/test_schedule_diff.py
+```
+
+### Session Aggregation Tests (No DB)
+
+```bash
+uv run python -m unittest tests/test_session_aggregate.py
 ```
 
 ## Invariants Enforced
