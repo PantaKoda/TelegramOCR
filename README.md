@@ -1,4 +1,4 @@
-# OCR Worker (Phase 3.5 Worker + Phase 5 OCR Adapter + Phase 6/6.5 Semantics)
+# OCR Worker (Phase 3.5 Worker + Phase 5 OCR Adapter + Phase 6/6.5 Semantics + Phase 7 Diff)
 
 Current state:
 
@@ -6,6 +6,7 @@ Current state:
 - Phase 5 adds real PaddleOCR box extraction adapter + golden sample tests (`ocr/paddle_adapter.py`)
 - Phase 6 adds deterministic semantic normalization utilities (`parser/semantic_normalizer.py`)
 - Phase 6.5 adds deterministic entity fingerprinting (`parser/entity_identity.py`)
+- Phase 7 adds deterministic schedule change detection (`domain/schedule_diff.py`)
 
 Phase 3.5 worker capabilities:
 
@@ -66,6 +67,21 @@ Phase 6.5 identity fingerprinting capabilities:
 - OCR confusion tolerance in keys:
   - accent stripping, case/whitespace collapse
   - `0/O` and `1/l/I` canonicalization
+
+Phase 7 change-detection capabilities:
+
+- compares canonical shift lists between schedule versions
+- matching key is identity-first and date-scoped:
+  - `(location_fingerprint, customer_fingerprint, schedule_date)`
+- for duplicate identity groups on the same date, pairing uses greedy minimum time distance:
+  - `|start_old-start_new| + |end_old-end_new|`
+- emits deterministic events:
+  - `ShiftAdded`
+  - `ShiftRemoved`
+  - `ShiftTimeChanged`
+  - `ShiftRelocated`
+  - `ShiftRetitled`
+- order-insensitive: pure reorder of unchanged shifts emits no events
 
 ## Setup
 
@@ -197,6 +213,12 @@ uv run python -m unittest tests/test_semantic_normalizer.py
 
 ```bash
 uv run python -m unittest tests/test_entity_identity.py
+```
+
+### Schedule Diff Tests (No DB)
+
+```bash
+uv run python -m unittest tests/test_schedule_diff.py
 ```
 
 ## Invariants Enforced
