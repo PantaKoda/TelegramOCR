@@ -31,7 +31,6 @@ from domain.session_lifecycle import (
 )
 from infra.event_store import load_day_snapshot, process_observation
 from infra.notification_store import persist_notifications
-from ocr.paddle_adapter import create_paddle_ocr, run_paddle_on_image
 from parser.layout_parser import parse_layout
 from parser.semantic_normalizer import CanonicalShift, normalize_entries
 
@@ -305,6 +304,10 @@ def run_iteration(
         else:
             if config.r2_config is None:
                 raise WorkerStageError("ocr", "WORKER_INPUT_MODE=ocr requires R2 configuration.")
+            try:
+                from ocr.paddle_adapter import create_paddle_ocr, run_paddle_on_image
+            except Exception as error:
+                raise WorkerStageError("ocr", "Failed importing PaddleOCR adapter dependencies.", cause=error) from error
             if ocr_client is None:
                 try:
                     ocr_client = create_paddle_ocr()

@@ -291,7 +291,8 @@ If the date cannot be resolved or is inconsistent:
     - `error.type`, `error.message`, `error.stage` (`ocr|layout|diff|db|lifecycle`)
   - persists notifications via `infra/notification_store.py` after successful session processing
   - runtime input mode is environment-driven (`WORKER_INPUT_MODE=fixture|ocr`) to support dev/prod switching without code changes
-  - Docker runtime added (`Dockerfile`) with `python:3.11-slim` base and `uv sync --frozen` dependency install
+  - OCR adapter import is lazy in `worker/run_forever.py` and activated only when `WORKER_INPUT_MODE=ocr` (prevents fixture-mode startup failures from optional OCR runtime dependencies)
+  - Docker runtime added (`Dockerfile`) with `python:3.11-slim` base, `uv sync --frozen` dependency install, and OpenCV/Paddle shared libs (`libgl1`, `libglib2.0-0`, `libsm6`, `libxext6`, `libxrender1`)
 
 ---
 
