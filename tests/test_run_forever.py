@@ -4,6 +4,7 @@ import uuid
 import unittest
 import logging
 from datetime import date
+from types import SimpleNamespace
 from unittest.mock import patch
 import json
 
@@ -16,6 +17,7 @@ from worker.run_forever import (
     JsonFormatter,
     WorkerRuntimeConfig,
     _extract_image_names,
+    _extract_schedule_date_from_boxes,
     _should_log_idle_iteration,
     _with_source_image_labels,
     _coerce_fixture_entries,
@@ -40,6 +42,9 @@ class RunForeverConfigTests(unittest.TestCase):
         self.assertEqual(config.poll_seconds, 5.0)
         self.assertEqual(config.summary_threshold, 3)
         self.assertEqual(config.idle_log_every, 12)
+        self.assertEqual(config.input_mode, "fixture")
+        self.assertIsNone(config.ocr_default_year)
+        self.assertIsNone(config.r2_config)
         self.assertEqual(config.fixture_payload_path, "fixtures/sample_schedule.json")
 
     def test_load_runtime_config_parses_custom_values(self) -> None:
@@ -57,7 +62,36 @@ class RunForeverConfigTests(unittest.TestCase):
         self.assertEqual(config.poll_seconds, 2.5)
         self.assertEqual(config.summary_threshold, 5)
         self.assertEqual(config.idle_log_every, 4)
+        self.assertEqual(config.input_mode, "fixture")
         self.assertEqual(config.fixture_payload_path, "/tmp/fixture.json")
+
+    def test_load_runtime_config_parses_ocr_mode_and_r2(self) -> None:
+        env = {
+            "DATABASE_URL": "postgresql://user:pass@localhost:5432/db",
+            "WORKER_INPUT_MODE": "ocr",
+            "OCR_DEFAULT_YEAR": "2026",
+            "R2_ENDPOINT_URL": "https://example.r2.cloudflarestorage.com",
+            "R2_ACCESS_KEY_ID": "abc",
+            "R2_SECRET_ACCESS_KEY": "def",
+            "R2_BUCKET": "telegram-images",
+            "R2_REGION": "auto",
+            "R2_KEY_PREFIX": "screenshots-v2",
+        }
+        with patch.dict(os.environ, env, clear=True):
+            config = load_runtime_config()
+        self.assertEqual(config.input_mode, "ocr")
+        self.assertEqual(config.ocr_default_year, 2026)
+        self.assertIsNotNone(config.r2_config)
+        self.assertEqual(config.r2_config.bucket, "telegram-images")
+
+    def test_load_runtime_config_ocr_mode_requires_r2(self) -> None:
+        env = {
+            "DATABASE_URL": "postgresql://user:pass@localhost:5432/db",
+            "WORKER_INPUT_MODE": "ocr",
+        }
+        with patch.dict(os.environ, env, clear=True):
+            with self.assertRaisesRegex(RuntimeError, "Missing required environment variable"):
+                load_runtime_config()
 
     def test_load_runtime_config_requires_database_url(self) -> None:
         with patch.dict(os.environ, {}, clear=True):
@@ -80,6 +114,15 @@ class RunForeverConfigTests(unittest.TestCase):
         }
         with patch.dict(os.environ, env, clear=True):
             with self.assertRaisesRegex(RuntimeError, "WORKER_IDLE_LOG_EVERY"):
+                load_runtime_config()
+
+    def test_load_runtime_config_rejects_unknown_input_mode(self) -> None:
+        env = {
+            "DATABASE_URL": "postgresql://user:pass@localhost:5432/db",
+            "WORKER_INPUT_MODE": "invalid",
+        }
+        with patch.dict(os.environ, env, clear=True):
+            with self.assertRaisesRegex(RuntimeError, "WORKER_INPUT_MODE"):
                 load_runtime_config()
 
 
@@ -165,6 +208,19 @@ class RunForeverFixtureParsingTests(unittest.TestCase):
         )
         self.assertEqual(len(annotated), 1)
         self.assertIn("(image: 20260213-205506777-IMG_0404-776b3c88.png)", annotated[0].message)
+
+    def test_extract_schedule_date_from_boxes_parses_day_month_with_default_year(self) -> None:
+        boxes = [
+            SimpleNamespace(text="Friday 22 August", x=10.0, y=100.0, h=20.0),
+            SimpleNamespace(text="Week 34", x=10.0, y=130.0, h=20.0),
+        ]
+        parsed = _extract_schedule_date_from_boxes(boxes, default_year=2026)
+        self.assertEqual(parsed, date(2026, 8, 22))
+
+    def test_extract_schedule_date_from_boxes_requires_year_or_default(self) -> None:
+        boxes = [SimpleNamespace(text="Friday 22 August", x=10.0, y=100.0, h=20.0)]
+        with self.assertRaisesRegex(RuntimeError, "missing year"):
+            _extract_schedule_date_from_boxes(boxes, default_year=None)
 
 
 @unittest.skipUnless(DB_URL, "Integration test requires TEST_DATABASE_URL or DATABASE_URL")
@@ -324,6 +380,9 @@ class RunForeverIterationIntegrationTests(unittest.TestCase):
             poll_seconds=5.0,
             fixture_payload_path=self.fixture_file.name,
             summary_threshold=3,
+            input_mode="fixture",
+            ocr_default_year=None,
+            r2_config=None,
         )
         lifecycle_config = SessionLifecycleConfig(idle_timeout_seconds=25)
 
