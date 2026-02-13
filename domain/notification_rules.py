@@ -178,9 +178,10 @@ def _event_message(event: ScheduleEvent, baseline_day: date | None) -> str:
             f"in {old_shift.get('city', 'unknown location')}"
         )
     if event.event_type == EVENT_TYPE_SHIFT_TIME_CHANGED:
+        time_delta = _time_change_phrase(old_shift, new_shift)
         return (
             f"{day_upper} {new_shift.get('city', old_shift.get('city', 'shift'))} shift moved "
-            f"{old_shift.get('start', '--:--')} → {new_shift.get('start', '--:--')}"
+            f"{time_delta}"
         )
     if event.event_type == EVENT_TYPE_SHIFT_RELOCATED:
         return (
@@ -198,6 +199,22 @@ def _event_message(event: ScheduleEvent, baseline_day: date | None) -> str:
             f"{new_shift.get('customer_name', old_shift.get('customer_name', 'customer'))}"
         )
     return f"{day_upper} schedule updated"
+
+
+def _time_change_phrase(old_shift: dict[str, Any], new_shift: dict[str, Any]) -> str:
+    old_start = str(old_shift.get("start", "--:--"))
+    old_end = str(old_shift.get("end", "--:--"))
+    new_start = str(new_shift.get("start", "--:--"))
+    new_end = str(new_shift.get("end", "--:--"))
+
+    start_changed = old_start != new_start
+    end_changed = old_end != new_end
+
+    if start_changed and not end_changed:
+        return f"{old_start} → {new_start}"
+    if end_changed and not start_changed:
+        return f"ends {old_end} → {new_end}"
+    return f"{old_start}–{old_end} → {new_start}–{new_end}"
 
 
 def _shift_type_label(value: str) -> str:
