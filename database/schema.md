@@ -133,6 +133,8 @@ Columns:
 - `event_type` text NOT NULL
 - `location_fingerprint` text NOT NULL
 - `customer_fingerprint` text NOT NULL
+- `old_value_hash` text NOT NULL
+- `new_value_hash` text NOT NULL
 - `old_value` jsonb NULL
 - `new_value` jsonb NULL
 - `detected_at` timestamptz NOT NULL
@@ -146,6 +148,12 @@ Allowed `event_type` values:
 - `shift_relocated`
 - `shift_retitled`
 - `shift_reclassified`
+
+Idempotency rule:
+
+- Unique dedupe key on:
+  - `(user_id, schedule_date, location_fingerprint, event_type, old_value_hash, new_value_hash)`
+- Prevents duplicate semantic events when a session/process is retried
 
 ## Worker Responsibilities (Current Phase)
 

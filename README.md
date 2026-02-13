@@ -115,9 +115,14 @@ Phase 9 event-store capabilities:
 - stores event identity anchors:
   - `location_fingerprint`
   - `customer_fingerprint`
+- idempotency protection:
+  - dedupe key `(user_id, schedule_date, location_fingerprint, event_type, old_value_hash, new_value_hash)`
+  - duplicate semantic events are ignored on retry via DB uniqueness + `ON CONFLICT DO NOTHING`
 - upserts latest day snapshot state for future diff baselines
 - supports pipeline step:
   - load previous snapshot -> diff -> persist events -> update snapshot
+- monotonic-history invariant:
+  - chronological replay of persisted events reconstructs the stored day snapshot
 
 ## Setup
 

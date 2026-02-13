@@ -6,6 +6,7 @@ import json
 import uuid
 from dataclasses import asdict
 from datetime import date, datetime, timezone
+import hashlib
 from typing import Any
 
 from psycopg import sql
@@ -82,12 +83,23 @@ def persist_events_and_snapshot(
             event_type,
             location_fingerprint,
             customer_fingerprint,
+            old_value_hash,
+            new_value_hash,
             old_value,
             new_value,
             detected_at,
             source_session_id
         )
-        VALUES (%s, %s, %s, %s, %s, %s, %s::jsonb, %s::jsonb, %s, %s)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s::jsonb, %s, %s)
+        ON CONFLICT (
+            user_id,
+            schedule_date,
+            location_fingerprint,
+            event_type,
+            old_value_hash,
+            new_value_hash
+        )
+        DO NOTHING
         """
     ).format(sql.Identifier(schema))
 
@@ -109,6 +121,7 @@ def persist_events_and_snapshot(
         """
     ).format(sql.Identifier(schema))
 
+    inserted_count = 0
     with conn.cursor() as cur:
         for row in event_rows:
             cur.execute(
@@ -120,6 +133,8 @@ def persist_events_and_snapshot(
                     row["event_type"],
                     row["location_fingerprint"],
                     row["customer_fingerprint"],
+                    row["old_value_hash"],
+                    row["new_value_hash"],
                     json.dumps(row["old_value"], sort_keys=True, separators=(",", ":"), ensure_ascii=False)
                     if row["old_value"] is not None
                     else None,
@@ -130,6 +145,7 @@ def persist_events_and_snapshot(
                     row["source_session_id"],
                 ),
             )
+            inserted_count += cur.rowcount
 
         snapshot_payload = [_canonical_shift_to_dict(shift) for shift in snapshot]
         cur.execute(
@@ -143,7 +159,7 @@ def persist_events_and_snapshot(
             ),
         )
 
-    return len(event_rows)
+    return inserted_count
 
 
 def process_observation(
@@ -191,6 +207,8 @@ def _event_row(
         "event_type": event_type,
         "location_fingerprint": location_source.location_fingerprint,
         "customer_fingerprint": customer_source.customer_fingerprint,
+        "old_value_hash": _value_hash(_canonical_shift_to_dict(old_shift) if old_shift is not None else None),
+        "new_value_hash": _value_hash(_canonical_shift_to_dict(new_shift) if new_shift is not None else None),
         "old_value": _canonical_shift_to_dict(old_shift) if old_shift is not None else None,
         "new_value": _canonical_shift_to_dict(new_shift) if new_shift is not None else None,
         "source_session_id": source_session_id,
@@ -215,6 +233,14 @@ def _event_shape(event: Any) -> tuple[str, CanonicalShift | None, CanonicalShift
 
 def _canonical_shift_to_dict(shift: CanonicalShift) -> dict[str, Any]:
     return asdict(shift)
+
+
+def _value_hash(value: dict[str, Any] | None) -> str:
+    if value is None:
+        payload = "null"
+    else:
+        payload = json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 def _canonical_shift_from_dict(value: Any) -> CanonicalShift:
@@ -251,4 +277,3 @@ def _canonical_shift_from_dict(value: Any) -> CanonicalShift:
         location_fingerprint=str(value["location_fingerprint"]),
         shift_type=str(value["shift_type"]),
     )
-

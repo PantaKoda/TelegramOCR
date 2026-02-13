@@ -25,6 +25,8 @@ CREATE TABLE IF NOT EXISTS schedule_ingest.schedule_event (
     ),
     location_fingerprint TEXT NOT NULL,
     customer_fingerprint TEXT NOT NULL,
+    old_value_hash TEXT NOT NULL,
+    new_value_hash TEXT NOT NULL,
     old_value JSONB NULL,
     new_value JSONB NULL,
     detected_at TIMESTAMPTZ NOT NULL,
@@ -37,5 +39,14 @@ CREATE INDEX IF NOT EXISTS idx_schedule_event_user_date_detected
 CREATE INDEX IF NOT EXISTS idx_schedule_event_source_session
     ON schedule_ingest.schedule_event (source_session_id);
 
-COMMIT;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_schedule_event_dedupe
+    ON schedule_ingest.schedule_event (
+        user_id,
+        schedule_date,
+        location_fingerprint,
+        event_type,
+        old_value_hash,
+        new_value_hash
+    );
 
+COMMIT;

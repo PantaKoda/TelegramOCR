@@ -1,6 +1,7 @@
 import os
 import uuid
 import unittest
+from dataclasses import asdict
 from datetime import date, datetime, timezone
 
 import psycopg
@@ -11,6 +12,7 @@ from infra.event_store import (
     EVENT_TYPE_SHIFT_ADDED,
     EVENT_TYPE_SHIFT_TIME_CHANGED,
     load_day_snapshot,
+    persist_events_and_snapshot,
     process_observation,
 )
 from parser.entity_identity import customer_fingerprint, location_fingerprint
@@ -87,10 +89,25 @@ class EventStoreIntegrationTests(unittest.TestCase):
                         event_type TEXT NOT NULL,
                         location_fingerprint TEXT NOT NULL,
                         customer_fingerprint TEXT NOT NULL,
+                        old_value_hash TEXT NOT NULL,
+                        new_value_hash TEXT NOT NULL,
                         old_value JSONB NULL,
                         new_value JSONB NULL,
                         detected_at TIMESTAMPTZ NOT NULL,
                         source_session_id UUID NOT NULL
+                    )
+                    """
+                )
+                cur.execute(
+                    f"""
+                    CREATE UNIQUE INDEX {self.schema}_schedule_event_dedupe
+                    ON {self.schema}.schedule_event (
+                        user_id,
+                        schedule_date,
+                        location_fingerprint,
+                        event_type,
+                        old_value_hash,
+                        new_value_hash
                     )
                     """
                 )
@@ -100,7 +117,7 @@ class EventStoreIntegrationTests(unittest.TestCase):
             with conn.cursor(row_factory=dict_row) as cur:
                 cur.execute(
                     f"""
-                    SELECT event_type, old_value, new_value, source_session_id::text AS source_session_id
+                    SELECT event_type, old_value, new_value, source_session_id::text AS source_session_id, detected_at
                     FROM {self.schema}.schedule_event
                     WHERE user_id = %s
                       AND schedule_date = %s
@@ -227,7 +244,146 @@ class EventStoreIntegrationTests(unittest.TestCase):
         self.assertEqual(loaded[0].start, "11:00")
         self.assertEqual(loaded[0].end, "15:00")
 
+    def test_persist_events_is_idempotent_for_same_semantic_event(self) -> None:
+        session_id = str(uuid.uuid4())
+        detected_at = datetime(2026, 8, 22, 10, 0, tzinfo=timezone.utc)
+        current = _shift()
+        events = [ShiftAdded(schedule_date=self.schedule_date.isoformat(), shift=current)]
+
+        with psycopg.connect(DB_URL) as conn:
+            with conn.transaction():
+                inserted_first = persist_events_and_snapshot(
+                    conn,
+                    self.schema,
+                    user_id=self.user_id,
+                    schedule_date=self.schedule_date,
+                    source_session_id=session_id,
+                    events=events,
+                    snapshot=[current],
+                    detected_at=detected_at,
+                )
+            with conn.transaction():
+                inserted_second = persist_events_and_snapshot(
+                    conn,
+                    self.schema,
+                    user_id=self.user_id,
+                    schedule_date=self.schedule_date,
+                    source_session_id=session_id,
+                    events=events,
+                    snapshot=[current],
+                    detected_at=detected_at,
+                )
+
+        self.assertEqual(inserted_first, 1)
+        self.assertEqual(inserted_second, 0)
+        rows = self._events()
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["event_type"], EVENT_TYPE_SHIFT_ADDED)
+
+    def test_replay_events_reconstructs_snapshot(self) -> None:
+        start_state = [_shift(start="10:00", end="14:00", customer_name="Marie Sjoberg")]
+        end_state = [_shift(start="11:00", end="15:00", customer_name="Marie Sjoberg")]
+        with psycopg.connect(DB_URL) as conn:
+            with conn.transaction():
+                process_observation(
+                    conn,
+                    self.schema,
+                    user_id=self.user_id,
+                    schedule_date=self.schedule_date,
+                    source_session_id=str(uuid.uuid4()),
+                    current_snapshot=start_state,
+                    detected_at=datetime(2026, 8, 22, 10, 0, tzinfo=timezone.utc),
+                )
+            with conn.transaction():
+                process_observation(
+                    conn,
+                    self.schema,
+                    user_id=self.user_id,
+                    schedule_date=self.schedule_date,
+                    source_session_id=str(uuid.uuid4()),
+                    current_snapshot=end_state,
+                    detected_at=datetime(2026, 8, 22, 12, 0, tzinfo=timezone.utc),
+                )
+
+            stored_snapshot = load_day_snapshot(conn, self.schema, user_id=self.user_id, schedule_date=self.schedule_date)
+
+        replayed = _replay_events(self._events())
+        self.assertEqual(_shift_list_key(replayed), _shift_list_key(stored_snapshot))
+
+
+def _replay_events(rows: list[dict]) -> list[CanonicalShift]:
+    state: list[CanonicalShift] = []
+    for row in rows:
+        event_type = row["event_type"]
+        old_value = row["old_value"]
+        new_value = row["new_value"]
+
+        if event_type == EVENT_TYPE_SHIFT_ADDED:
+            if new_value is not None:
+                state.append(_shift_from_dict(new_value))
+            continue
+
+        if event_type == "shift_removed":
+            if old_value is not None:
+                state = [shift for shift in state if _event_shift_key(shift) != _event_shift_key(_shift_from_dict(old_value))]
+            continue
+
+        if event_type in {"shift_time_changed", "shift_relocated", "shift_retitled", "shift_reclassified"}:
+            if old_value is not None:
+                old_key = _event_shift_key(_shift_from_dict(old_value))
+                state = [shift for shift in state if _event_shift_key(shift) != old_key]
+            if new_value is not None:
+                state.append(_shift_from_dict(new_value))
+            continue
+
+        raise RuntimeError(f"Unexpected event_type in replay: {event_type}")
+
+    return sorted(state, key=_event_shift_key)
+
+
+def _shift_from_dict(value: dict) -> CanonicalShift:
+    return CanonicalShift(
+        start=value["start"],
+        end=value["end"],
+        customer_name=value["customer_name"],
+        customer_fingerprint=value["customer_fingerprint"],
+        street=value["street"],
+        street_number=value["street_number"],
+        postal_code=value["postal_code"],
+        postal_area=value["postal_area"],
+        city=value["city"],
+        location_fingerprint=value["location_fingerprint"],
+        shift_type=value["shift_type"],
+    )
+
+
+def _event_shift_key(shift: CanonicalShift) -> tuple:
+    return (
+        shift.location_fingerprint,
+        shift.customer_fingerprint,
+        shift.start,
+        shift.end,
+        shift.shift_type,
+        shift.street,
+        shift.street_number,
+        shift.city,
+        shift.customer_name,
+    )
+
+
+def _shift_list_key(shifts: list[CanonicalShift]) -> list[dict]:
+    rows = [asdict(shift) for shift in shifts]
+    rows.sort(
+        key=lambda value: (
+            value["location_fingerprint"],
+            value["customer_fingerprint"],
+            value["start"],
+            value["end"],
+            value["customer_name"],
+        )
+    )
+    return rows
+
 
 if __name__ == "__main__":
     unittest.main()
-
