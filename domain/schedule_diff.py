@@ -43,7 +43,14 @@ class ShiftRetitled:
     after: CanonicalShift
 
 
-ScheduleDiffEvent = ShiftAdded | ShiftRemoved | ShiftTimeChanged | ShiftRelocated | ShiftRetitled
+@dataclass(frozen=True)
+class ShiftReclassified:
+    schedule_date: str
+    before: CanonicalShift
+    after: CanonicalShift
+
+
+ScheduleDiffEvent = ShiftAdded | ShiftRemoved | ShiftTimeChanged | ShiftRelocated | ShiftRetitled | ShiftReclassified
 
 
 @dataclass(frozen=True)
@@ -77,6 +84,8 @@ def diff_schedules(
             events.append(ShiftTimeChanged(schedule_date=schedule_date, before=old_ref.shift, after=new_ref.shift))
         elif old_ref.shift.customer_name != new_ref.shift.customer_name:
             events.append(ShiftRetitled(schedule_date=schedule_date, before=old_ref.shift, after=new_ref.shift))
+        elif old_ref.shift.shift_type != new_ref.shift.shift_type:
+            events.append(ShiftReclassified(schedule_date=schedule_date, before=old_ref.shift, after=new_ref.shift))
 
     # Stage 2: relocation detection (same customer + time + date, moved location).
     relocation_pairs, old_refs, new_refs = _pair_by_key(

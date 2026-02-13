@@ -235,6 +235,16 @@ If the date cannot be resolved or is inconsistent:
   - merge policy keeps earliest start and latest end, prefers longer address fields, preserves identity keys, and tracks per-shift `source_count`
   - output shape: `AggregatedDaySchedule` with deduplicated `AggregatedShift` entries
   - tests in `tests/test_session_aggregate.py` cover overlap dedupe, partial coverage union, jitter merge, same-time different-location separation, and triple-observation dedupe
+- Phase 9 event store (durable history persistence):
+  - infrastructure module in `infra/event_store.py`
+  - pipeline helper performs: load previous snapshot -> diff -> persist events -> upsert day snapshot
+  - persists immutable semantic events in `schedule_event` with identity anchors and old/new canonical values
+  - persists latest canonical day state in `day_snapshot` for future diffs
+  - supported persisted event types: `shift_added`, `shift_removed`, `shift_time_changed`, `shift_relocated`, `shift_retitled`, `shift_reclassified`
+  - idempotency enforced with DB dedupe key (`user_id`, `schedule_date`, `location_fingerprint`, `event_type`, `old_value_hash`, `new_value_hash`) and conflict-ignore insert
+  - monotonic history invariant validated in tests by replaying persisted events and comparing reconstructed snapshot to stored snapshot
+  - DB migration added: `database/migrations/20260213_add_schedule_event_history.sql`
+  - integration tests added: `tests/test_event_store.py`
 - Worker runtime is still fixture-driven (`main.py`); OCR adapter is validated separately and not yet used for DB write path
 
 ---
