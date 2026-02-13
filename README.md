@@ -173,6 +173,9 @@ Phase 12 notification-store capabilities (infrastructure persistence):
 - stores normalized envelope fields:
   - `notification_id`, `user_id`, `schedule_date`, `source_session_id`, `status`
   - `notification_type`, `message`, `event_ids`, `created_at`
+- runtime message enrichment includes source image filename suffix from `capture_image.r2_key` basename(s)
+  - single image: `(... image: <filename>)`
+  - multi image: `(... images: <filename1>, <filename2>, ...)`
 - lifecycle wiring supports:
   - `events -> build_notifications(events) -> store_notifications(notifications)`
   - one processing run per finalized session persists notifications once
