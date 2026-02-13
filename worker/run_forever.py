@@ -7,7 +7,7 @@ import logging
 import os
 import sys
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -17,7 +17,7 @@ from psycopg import sql
 from psycopg.rows import dict_row
 
 from domain import schedule_diff
-from domain.notification_rules import build_notifications
+from domain.notification_rules import UserNotification, build_notifications
 from domain.session_lifecycle import (
     SessionLifecycleConfig,
     load_lifecycle_config_from_env,
@@ -171,6 +171,8 @@ def run_iteration(
             raise WorkerStageError("lifecycle", f"Session {session_id} has no capture images.")
 
         context = _ensure_session_context(inner_conn, schema, session_id, session_context)
+        image_names = _extract_image_names(rows)
+        context["image_names"] = image_names
         logger.info(
             "Session images loaded",
             extra={
@@ -179,6 +181,7 @@ def run_iteration(
                 "user_id": context["user_id"],
                 "correlation_id": context["correlation_id"],
                 "image_count": len(rows),
+                "image_names": list(image_names),
             },
         )
         return rows
@@ -334,6 +337,8 @@ def run_iteration(
             context = session_context.get(session_id, {"user_id": user_id, "correlation_id": session_id})
         else:
             context = {"user_id": user_id, "correlation_id": session_id}
+        image_names = tuple(str(value) for value in context.get("image_names", ()))
+        notifications = _with_source_image_labels(notifications, image_names)
         summary_used = any(
             (item.get("notification_type") if isinstance(item, dict) else getattr(item, "notification_type", "")) == "summary"
             for item in notifications
@@ -347,6 +352,7 @@ def run_iteration(
                 "correlation_id": context["correlation_id"],
                 "notification_count": len(notifications),
                 "summary_used": summary_used,
+                "image_names": list(image_names),
             },
         )
         return notifications
@@ -557,6 +563,46 @@ def _should_log_idle_iteration(idle_iteration_streak: int, idle_log_every: int) 
     if idle_iteration_streak == 1:
         return True
     return idle_iteration_streak % idle_log_every == 0
+
+
+def _extract_image_names(image_rows: list[dict[str, Any]]) -> tuple[str, ...]:
+    names: list[str] = []
+    seen: set[str] = set()
+    for row in image_rows:
+        key = str(row.get("r2_key", "") or "")
+        name = Path(key).name if key else ""
+        if not name:
+            sequence = row.get("sequence")
+            name = f"sequence-{sequence}" if sequence is not None else "unknown-image"
+        if name in seen:
+            continue
+        seen.add(name)
+        names.append(name)
+    return tuple(names)
+
+
+def _with_source_image_labels(notifications: list[Any], image_names: tuple[str, ...]) -> list[Any]:
+    if not notifications or not image_names:
+        return notifications
+    label = "image" if len(image_names) == 1 else "images"
+    suffix = f" ({label}: {', '.join(image_names)})"
+    annotated: list[Any] = []
+    for notification in notifications:
+        if isinstance(notification, UserNotification):
+            message = notification.message
+            if not message.endswith(suffix):
+                message = f"{message}{suffix}"
+            annotated.append(replace(notification, message=message))
+            continue
+        if isinstance(notification, dict):
+            updated = dict(notification)
+            message = str(updated.get("message", ""))
+            if not message.endswith(suffix):
+                updated["message"] = f"{message}{suffix}"
+            annotated.append(updated)
+            continue
+        annotated.append(notification)
+    return annotated
 
 
 def _load_fixture_payload(path: str) -> dict[str, Any]:

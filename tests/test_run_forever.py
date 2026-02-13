@@ -10,11 +10,14 @@ import json
 import psycopg
 from psycopg.rows import dict_row
 
+from domain.notification_rules import UserNotification
 from domain.session_lifecycle import SessionLifecycleConfig
 from worker.run_forever import (
     JsonFormatter,
     WorkerRuntimeConfig,
+    _extract_image_names,
     _should_log_idle_iteration,
+    _with_source_image_labels,
     _coerce_fixture_entries,
     _parse_schedule_date,
     load_runtime_config,
@@ -131,6 +134,37 @@ class RunForeverFixtureParsingTests(unittest.TestCase):
         rows = _coerce_fixture_entries(payload)
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["address"], "Valebergsvagen 316")
+
+    def test_extract_image_names_uses_r2_key_basename(self) -> None:
+        rows = [
+            {"r2_key": "screenshots-v2/8225717176/20260213-205506777-IMG_0404-776b3c88.png", "sequence": 1},
+            {"r2_key": "screenshots-v2/8225717176/20260213-205507111-IMG_0405-abcdef12.png", "sequence": 2},
+        ]
+        image_names = _extract_image_names(rows)
+        self.assertEqual(
+            image_names,
+            (
+                "20260213-205506777-IMG_0404-776b3c88.png",
+                "20260213-205507111-IMG_0405-abcdef12.png",
+            ),
+        )
+
+    def test_with_source_image_labels_appends_suffix(self) -> None:
+        notification = UserNotification(
+            notification_id="n1",
+            user_id=8225717176,
+            schedule_date=date(2026, 2, 10),
+            source_session_id="session-1",
+            message="New shift added on 2026-02-10 10:00–14:00 in Billdal",
+            notification_type="event",
+            event_ids=("e1",),
+        )
+        annotated = _with_source_image_labels(
+            [notification],
+            ("20260213-205506777-IMG_0404-776b3c88.png",),
+        )
+        self.assertEqual(len(annotated), 1)
+        self.assertIn("(image: 20260213-205506777-IMG_0404-776b3c88.png)", annotated[0].message)
 
 
 @unittest.skipUnless(DB_URL, "Integration test requires TEST_DATABASE_URL or DATABASE_URL")

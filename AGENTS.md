@@ -268,6 +268,7 @@ If the date cannot be resolved or is inconsistent:
   - persists deterministic Phase 10 notifications to `schedule_notification`
   - notification rows include delivery state fields (`status`: `pending|sent|failed`, `sent_at`: nullable timestamp)
   - idempotency enforced by deterministic `notification_id` primary key + conflict-ignore insert behavior
+  - worker enriches notification `message` text with source image filename suffix from `capture_image.r2_key` basenames
   - lifecycle orchestration supports callback flow:
     - `events -> build_notifications(events) -> store_notifications(notifications)`
   - DB migration added: `database/migrations/20260213_add_schedule_notifications.sql`
