@@ -112,7 +112,25 @@ class ScheduleDiffTests(unittest.TestCase):
         events = diff_schedules(old, new, schedule_date="2026-08-22")
         self.assertEqual(events, [])
 
+    def test_duplicate_identity_with_one_time_move_is_time_changed_not_add_remove(self) -> None:
+        old = [
+            _shift(start="08:00", end="10:00", customer_name="Marie Sjoberg", street="Valebergsvagen"),
+            _shift(start="15:00", end="17:00", customer_name="Marie Sjoberg", street="Valebergsvagen"),
+        ]
+        new = [
+            _shift(start="09:00", end="11:00", customer_name="Marie Sjoberg", street="Valebergsvagen"),
+            _shift(start="15:00", end="17:00", customer_name="Marie Sjoberg", street="Valebergsvagen"),
+        ]
+
+        events = diff_schedules(old, new, schedule_date="2026-08-22")
+
+        self.assertEqual(len(events), 1)
+        self.assertIsInstance(events[0], ShiftTimeChanged)
+        self.assertEqual(events[0].before.start, "08:00")
+        self.assertEqual(events[0].before.end, "10:00")
+        self.assertEqual(events[0].after.start, "09:00")
+        self.assertEqual(events[0].after.end, "11:00")
+
 
 if __name__ == "__main__":
     unittest.main()
-

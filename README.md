@@ -73,6 +73,8 @@ Phase 7 change-detection capabilities:
 - compares canonical shift lists between schedule versions
 - matching key is identity-first and date-scoped:
   - `(location_fingerprint, customer_fingerprint, schedule_date)`
+- for duplicate identity groups on the same date, pairing uses greedy minimum time distance:
+  - `|start_old-start_new| + |end_old-end_new|`
 - emits deterministic events:
   - `ShiftAdded`
   - `ShiftRemoved`

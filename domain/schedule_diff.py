@@ -70,6 +70,7 @@ def diff_schedules(
         old_refs,
         new_refs,
         key_fn=lambda ref: (schedule_date, ref.shift.location_fingerprint, ref.shift.customer_fingerprint),
+        pair_mode="time_distance",
     )
     for old_ref, new_ref in exact_pairs:
         if (old_ref.shift.start, old_ref.shift.end) != (new_ref.shift.start, new_ref.shift.end):
@@ -123,6 +124,7 @@ def _pair_by_key(
     new_refs: list[_ShiftRef],
     *,
     key_fn: Callable[[_ShiftRef], tuple],
+    pair_mode: str = "index",
 ) -> tuple[list[tuple[_ShiftRef, _ShiftRef]], list[_ShiftRef], list[_ShiftRef]]:
     old_by_key: dict[tuple, list[_ShiftRef]] = defaultdict(list)
     new_by_key: dict[tuple, list[_ShiftRef]] = defaultdict(list)
@@ -139,10 +141,13 @@ def _pair_by_key(
     for key in sorted(set(old_by_key.keys()) & set(new_by_key.keys())):
         old_values = sorted(old_by_key[key], key=_ref_sort_key)
         new_values = sorted(new_by_key[key], key=_ref_sort_key)
-        pair_count = min(len(old_values), len(new_values))
-        for index in range(pair_count):
-            old_ref = old_values[index]
-            new_ref = new_values[index]
+
+        if pair_mode == "time_distance":
+            pairs = _pair_group_by_time_distance(old_values, new_values)
+        else:
+            pairs = _pair_group_by_index(old_values, new_values)
+
+        for old_ref, new_ref in pairs:
             paired.append((old_ref, new_ref))
             consumed_old.add(old_ref.sequence)
             consumed_new.add(new_ref.sequence)
@@ -167,9 +172,56 @@ def _ref_sort_key(ref: _ShiftRef) -> tuple:
     )
 
 
+def _pair_group_by_index(old_values: list[_ShiftRef], new_values: list[_ShiftRef]) -> list[tuple[_ShiftRef, _ShiftRef]]:
+    pair_count = min(len(old_values), len(new_values))
+    pairs: list[tuple[_ShiftRef, _ShiftRef]] = []
+    for index in range(pair_count):
+        pairs.append((old_values[index], new_values[index]))
+    return pairs
+
+
+def _pair_group_by_time_distance(
+    old_values: list[_ShiftRef],
+    new_values: list[_ShiftRef],
+) -> list[tuple[_ShiftRef, _ShiftRef]]:
+    # Greedy minimal pairing for duplicate-identity same-day instances.
+    remaining_old = list(old_values)
+    remaining_new = list(new_values)
+    pairs: list[tuple[_ShiftRef, _ShiftRef]] = []
+
+    while remaining_old and remaining_new:
+        best_old_index = 0
+        best_new_index = 0
+        best_score: tuple[int, tuple, tuple] | None = None
+
+        for old_index, old_ref in enumerate(remaining_old):
+            for new_index, new_ref in enumerate(remaining_new):
+                score = (
+                    _time_distance_minutes(old_ref.shift, new_ref.shift),
+                    _ref_sort_key(old_ref),
+                    _ref_sort_key(new_ref),
+                )
+                if best_score is None or score < best_score:
+                    best_score = score
+                    best_old_index = old_index
+                    best_new_index = new_index
+
+        pairs.append((remaining_old.pop(best_old_index), remaining_new.pop(best_new_index)))
+
+    return pairs
+
+
+def _time_distance_minutes(old: CanonicalShift, new: CanonicalShift) -> int:
+    return abs(_minutes(old.start) - _minutes(new.start)) + abs(_minutes(old.end) - _minutes(new.end))
+
+
+def _minutes(value: str) -> int:
+    hour_text, minute_text = value.split(":", 1)
+    return int(hour_text) * 60 + int(minute_text)
+
+
 def _validate_schedule_date(value: str) -> None:
     try:
         date.fromisoformat(value)
     except ValueError as exc:
         raise ValueError(f"Invalid schedule_date: {value}") from exc
-

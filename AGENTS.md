@@ -221,6 +221,7 @@ If the date cannot be resolved or is inconsistent:
 - Phase 7 schedule diff (domain-level interpretation):
   - deterministic diff engine in `domain/schedule_diff.py`
   - compares canonical shifts across versions using identity-first matching (`location_fingerprint`, `customer_fingerprint`, `schedule_date`)
+  - duplicate identity instances on the same date are paired by greedy minimum time distance before classifying events
   - emits typed change events: `ShiftAdded`, `ShiftRemoved`, `ShiftTimeChanged`, `ShiftRelocated`, `ShiftRetitled`
   - event detection stages separate identity/time/relocation/retitle concerns to reduce false positives from ordering noise
   - order-only changes do not emit events
