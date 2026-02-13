@@ -1,4 +1,4 @@
-# OCR Worker (Phase 3.5 Worker + Phase 5 OCR Adapter + Phase 6/6.5 Semantics + Phase 7 Diff + Phase 8 Aggregation + Phase 9 Event Store)
+# OCR Worker (Phase 3.5 Worker + Phase 5 OCR Adapter + Phase 6/6.5 Semantics + Phase 7 Diff + Phase 8 Aggregation + Phase 9 Event Store + Phase 10 Notifications)
 
 Current state:
 
@@ -9,6 +9,7 @@ Current state:
 - Phase 7 adds deterministic schedule change detection (`domain/schedule_diff.py`)
 - Phase 8 adds deterministic multi-image session aggregation (`domain/session_aggregate.py`)
 - Phase 9 adds durable event/snapshot persistence (`infra/event_store.py`)
+- Phase 10 adds deterministic event-to-human notification rules (`domain/notification_rules.py`)
 
 Phase 3.5 worker capabilities:
 
@@ -123,6 +124,21 @@ Phase 9 event-store capabilities:
   - load previous snapshot -> diff -> persist events -> update snapshot
 - monotonic-history invariant:
   - chronological replay of persisted events reconstructs the stored day snapshot
+
+Phase 10 notification-rule capabilities:
+
+- maps persisted semantic events to human-readable notification text:
+  - `shift_added`
+  - `shift_removed`
+  - `shift_time_changed`
+  - `shift_relocated`
+  - `shift_reclassified`
+  - `shift_retitled`
+- uses canonical fields only (`start`, `end`, `city`, `shift_type`, `customer_name`)
+- noise suppression:
+  - if event count for same `(user_id, date, source_session)` reaches threshold (default `3`), emits one summary notification
+- replay dedupe:
+  - supports `already_notified_event_ids` filter so reruns do not produce duplicate notifications
 
 ## Setup
 
@@ -280,6 +296,12 @@ Requires `TEST_DATABASE_URL` or `DATABASE_URL`:
 
 ```bash
 uv run python -m unittest tests/test_event_store.py
+```
+
+### Notification Rules Tests (No DB)
+
+```bash
+uv run python -m unittest tests/test_notification_rules.py
 ```
 
 ## Invariants Enforced
