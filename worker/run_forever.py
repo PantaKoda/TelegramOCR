@@ -8,7 +8,7 @@ import os
 import sys
 import time
 from dataclasses import dataclass
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -16,6 +16,7 @@ import psycopg
 from psycopg import sql
 from psycopg.rows import dict_row
 
+from domain import schedule_diff
 from domain.notification_rules import build_notifications
 from domain.session_lifecycle import (
     SessionLifecycleConfig,
@@ -23,11 +24,12 @@ from domain.session_lifecycle import (
     run_lifecycle_once,
     utc_now,
 )
-from infra.event_store import process_observation
+from infra.event_store import load_day_snapshot, process_observation
 from infra.notification_store import persist_notifications
 from parser.semantic_normalizer import CanonicalShift, normalize_entries
 
 DEFAULT_FIXTURE_PAYLOAD_PATH = "fixtures/sample_schedule.json"
+SERVICE_NAME = "python-worker"
 
 
 class JsonFormatter(logging.Formatter):
@@ -57,11 +59,17 @@ class JsonFormatter(logging.Formatter):
     }
 
     def format(self, record: logging.LogRecord) -> str:
+        event_name = getattr(record, "event", "log")
         payload: dict[str, Any] = {
-            "timestamp": datetime.utcnow().isoformat(timespec="milliseconds") + "Z",
+            "timestamp": datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z"),
+            "service": SERVICE_NAME,
             "level": record.levelname,
+            "event": event_name,
             "message": record.getMessage(),
             "logger": record.name,
+            "session_id": getattr(record, "session_id", None),
+            "user_id": getattr(record, "user_id", None),
+            "correlation_id": getattr(record, "correlation_id", None),
         }
         for key, value in record.__dict__.items():
             if key not in self._RESERVED and not key.startswith("_"):
@@ -78,6 +86,13 @@ class WorkerRuntimeConfig:
     poll_seconds: float
     fixture_payload_path: str
     summary_threshold: int
+
+
+class WorkerStageError(RuntimeError):
+    def __init__(self, stage: str, message: str, *, cause: Exception | None = None) -> None:
+        super().__init__(message)
+        self.stage = stage
+        self.__cause__ = cause
 
 
 def setup_logger() -> logging.Logger:
@@ -117,11 +132,30 @@ def run_iteration(
     logger: logging.Logger,
 ) -> dict[str, int]:
     stored_notification_count = 0
+    session_context: dict[str, dict[str, Any]] = {}
+    iteration_now = utc_now()
+    skipped_idle_count = _count_sessions_waiting_for_idle(
+        conn,
+        config.db_schema,
+        lifecycle_config=lifecycle_config,
+        now=iteration_now,
+    )
+    if skipped_idle_count > 0:
+        logger.info(
+            "Sessions waiting for idle timeout",
+            extra={
+                "event": "session.skipped_idle",
+                "session_id": None,
+                "user_id": None,
+                "correlation_id": None,
+                "skipped_session_count": skipped_idle_count,
+            },
+        )
 
     def load_session_images(inner_conn: Any, schema: str, session_id: str) -> list[dict[str, Any]]:
         query = sql.SQL(
             """
-            SELECT id::text AS id, sequence, r2_key, created_at
+            SELECT id::text AS id, session_id::text AS session_id, sequence, r2_key, created_at
             FROM {}.capture_image
             WHERE session_id = %s
             ORDER BY sequence ASC
@@ -131,78 +165,225 @@ def run_iteration(
             cur.execute(query, (session_id,))
             rows = list(cur.fetchall())
         if not rows:
-            raise RuntimeError(f"Session {session_id} has no capture images.")
+            raise WorkerStageError("lifecycle", f"Session {session_id} has no capture images.")
+
+        context = _ensure_session_context(inner_conn, schema, session_id, session_context)
+        logger.info(
+            "Session images loaded",
+            extra={
+                "event": "session.images_loaded",
+                "session_id": session_id,
+                "user_id": context["user_id"],
+                "correlation_id": context["correlation_id"],
+                "image_count": len(rows),
+            },
+        )
         return rows
 
     def run_full_pipeline(images: list[dict[str, Any]]) -> dict[str, Any]:
-        fixture_payload = _load_fixture_payload(config.fixture_payload_path)
-        schedule_date = _parse_schedule_date(fixture_payload)
-        entries = _coerce_fixture_entries(fixture_payload)
-        canonical_shifts = normalize_entries(entries)
-        canonical_shifts.sort(key=_canonical_shift_sort_key)
+        session_id = str(images[0].get("session_id", "")) if images else ""
+        context = session_context.get(session_id, {"user_id": None, "correlation_id": session_id or None})
+        try:
+            fixture_payload = _load_fixture_payload(config.fixture_payload_path)
+            entries = _coerce_fixture_entries(fixture_payload)
+        except Exception as error:
+            raise WorkerStageError("ocr", "Failed loading OCR payload.", cause=error) from error
+
         logger.info(
-            "Pipeline payload prepared",
+            "OCR stage completed",
             extra={
-                "event": "worker.pipeline.prepared",
-                "image_count": len(images),
-                "canonical_shift_count": len(canonical_shifts),
+                "event": "ocr.completed",
+                "session_id": session_id or None,
+                "user_id": context["user_id"],
+                "correlation_id": context["correlation_id"],
+                "text_block_count": len(entries),
+                "mode": "fixture",
+            },
+        )
+
+        try:
+            schedule_date = _parse_schedule_date(fixture_payload)
+            canonical_shifts = normalize_entries(entries)
+            canonical_shifts.sort(key=_canonical_shift_sort_key)
+        except Exception as error:
+            raise WorkerStageError("layout", "Failed layout/semantic normalization.", cause=error) from error
+
+        logger.info(
+            "Layout shifts detected",
+            extra={
+                "event": "layout.shifts_detected",
+                "session_id": session_id or None,
+                "user_id": context["user_id"],
+                "correlation_id": context["correlation_id"],
+                "shift_count": len(canonical_shifts),
                 "schedule_date": schedule_date.isoformat(),
             },
         )
+        logger.info(
+            "Aggregation completed",
+            extra={
+                "event": "aggregation.completed",
+                "session_id": session_id or None,
+                "user_id": context["user_id"],
+                "correlation_id": context["correlation_id"],
+                "input_shift_count": len(canonical_shifts),
+                "output_shift_count": len(canonical_shifts),
+            },
+        )
         return {
+            "session_id": session_id,
             "schedule_date": schedule_date,
             "canonical_shifts": canonical_shifts,
             "image_count": len(images),
         }
 
     def persist_events_and_snapshot(inner_conn: Any, schema: str, session_id: str, pipeline_output: dict[str, Any]) -> list[dict[str, Any]]:
+        context = _ensure_session_context(inner_conn, schema, session_id, session_context)
         schedule_date_value = pipeline_output["schedule_date"]
         canonical_shifts_value = pipeline_output["canonical_shifts"]
         if not isinstance(schedule_date_value, date):
-            raise RuntimeError("Pipeline output is missing schedule_date.")
+            raise WorkerStageError("diff", "Pipeline output is missing schedule_date.")
         if not isinstance(canonical_shifts_value, list) or not all(
             isinstance(item, CanonicalShift) for item in canonical_shifts_value
         ):
-            raise RuntimeError("Pipeline output is missing canonical_shifts.")
+            raise WorkerStageError("diff", "Pipeline output is missing canonical_shifts.")
 
-        user_id = _load_session_user_id(inner_conn, schema, session_id)
-        process_observation(
+        old_snapshot = load_day_snapshot(
             inner_conn,
             schema,
-            user_id=user_id,
+            user_id=context["user_id"],
             schedule_date=schedule_date_value,
-            source_session_id=session_id,
-            current_snapshot=canonical_shifts_value,
         )
+        try:
+            domain_events = process_observation(
+                inner_conn,
+                schema,
+                user_id=context["user_id"],
+                schedule_date=schedule_date_value,
+                source_session_id=session_id,
+                current_snapshot=canonical_shifts_value,
+            )
+        except Exception as error:
+            raise WorkerStageError("db", "Failed persisting events/snapshot.", cause=error) from error
+
+        event_types = sorted({_domain_event_type_name(item) for item in domain_events})
+        logger.info(
+            "Diff computed",
+            extra={
+                "event": "diff.computed",
+                "session_id": session_id,
+                "user_id": context["user_id"],
+                "correlation_id": context["correlation_id"],
+                "old_shift_count": len(old_snapshot),
+                "new_shift_count": len(canonical_shifts_value),
+                "event_count": len(domain_events),
+                "event_types": event_types,
+            },
+        )
+
         events = _load_session_events(inner_conn, schema, session_id)
         logger.info(
-            "Events loaded for session",
+            "Events persisted",
             extra={
-                "event": "worker.pipeline.events_loaded",
+                "event": "events.persisted",
                 "session_id": session_id,
+                "user_id": context["user_id"],
+                "correlation_id": context["correlation_id"],
                 "event_count": len(events),
+                "event_types": sorted({str(row["event_type"]) for row in events}),
             },
         )
         return events
 
     def store_notifications_callback(inner_conn: Any, schema: str, _session_id: str, notifications: list[Any]) -> int:
         nonlocal stored_notification_count
+        context = _ensure_session_context(inner_conn, schema, _session_id, session_context)
         inserted = persist_notifications(inner_conn, schema, notifications=notifications)
         stored_notification_count += inserted
+        logger.info(
+            "Notifications stored",
+            extra={
+                "event": "notifications.stored",
+                "session_id": _session_id,
+                "user_id": context["user_id"],
+                "correlation_id": context["correlation_id"],
+                "notification_count": len(notifications),
+                "stored_count": inserted,
+            },
+        )
         return inserted
+
+    def build_notifications_callback(events: list[Any]) -> list[Any]:
+        notifications = build_notifications(events, summary_threshold=config.summary_threshold)
+        session_id: str | None = None
+        user_id: int | None = None
+        if events:
+            first = events[0]
+            if isinstance(first, dict):
+                session_id = str(first.get("source_session_id") or "") or None
+                raw_user_id = first.get("user_id")
+                user_id = int(raw_user_id) if raw_user_id is not None else None
+            else:
+                session_id = str(getattr(first, "source_session_id", "") or "") or None
+                raw_user_id = getattr(first, "user_id", None)
+                user_id = int(raw_user_id) if raw_user_id is not None else None
+        if session_id:
+            context = session_context.get(session_id, {"user_id": user_id, "correlation_id": session_id})
+        else:
+            context = {"user_id": user_id, "correlation_id": session_id}
+        summary_used = any(
+            (item.get("notification_type") if isinstance(item, dict) else getattr(item, "notification_type", "")) == "summary"
+            for item in notifications
+        )
+        logger.info(
+            "Notifications generated",
+            extra={
+                "event": "notifications.generated",
+                "session_id": session_id,
+                "user_id": context["user_id"],
+                "correlation_id": context["correlation_id"],
+                "notification_count": len(notifications),
+                "summary_used": summary_used,
+            },
+        )
+        return notifications
+
+    def on_session_finalized(session_id: str) -> None:
+        context = _ensure_session_context(conn, config.db_schema, session_id, session_context)
+        logger.info(
+            "Session finalized",
+            extra={
+                "event": "session.finalized",
+                "session_id": session_id,
+                "user_id": context["user_id"],
+                "correlation_id": context["correlation_id"],
+            },
+        )
+
+    def on_session_processed(session_id: str, notifications: list[Any]) -> None:
+        context = _ensure_session_context(conn, config.db_schema, session_id, session_context)
+        logger.info(
+            "Session processed",
+            extra={
+                "event": "session.processed",
+                "session_id": session_id,
+                "user_id": context["user_id"],
+                "correlation_id": context["correlation_id"],
+                "notification_count": len(notifications),
+            },
+        )
 
     processed = run_lifecycle_once(
         conn,
         config.db_schema,
-        utc_now(),
+        iteration_now,
         load_session_images=load_session_images,
         run_full_pipeline=run_full_pipeline,
         persist_events_and_snapshot=persist_events_and_snapshot,
-        build_notifications=lambda events: build_notifications(
-            events,
-            summary_threshold=config.summary_threshold,
-        ),
+        build_notifications=build_notifications_callback,
         store_notifications=store_notifications_callback,
+        on_session_finalized=on_session_finalized,
+        on_session_processed=on_session_processed,
         config=lifecycle_config,
     )
 
@@ -244,9 +425,77 @@ def run_forever() -> None:
                     "stored_notifications": result["stored_notifications"],
                 },
             )
-        except Exception:
-            logger.exception("Lifecycle iteration failed", extra={"event": "worker.iteration.error"})
+        except Exception as error:
+            stage = error.stage if isinstance(error, WorkerStageError) else "lifecycle"
+            logger.exception(
+                "Lifecycle iteration failed",
+                extra={
+                    "event": "worker.iteration.error",
+                    "error.type": type(error).__name__,
+                    "error.message": str(error),
+                    "error.stage": stage,
+                },
+            )
         time.sleep(config.poll_seconds)
+
+
+def _ensure_session_context(
+    conn: Any,
+    schema: str,
+    session_id: str,
+    cache: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    cached = cache.get(session_id)
+    if cached is not None:
+        return cached
+    user_id = _load_session_user_id(conn, schema, session_id)
+    value = {"user_id": user_id, "correlation_id": session_id}
+    cache[session_id] = value
+    return value
+
+
+def _count_sessions_waiting_for_idle(
+    conn: Any,
+    schema: str,
+    *,
+    lifecycle_config: SessionLifecycleConfig,
+    now: datetime,
+) -> int:
+    cutoff = now - timedelta(seconds=lifecycle_config.idle_timeout_seconds)
+    query = sql.SQL(
+        """
+        SELECT COUNT(*) AS waiting_count
+        FROM (
+            SELECT cs.id
+            FROM {}.capture_session cs
+            LEFT JOIN {}.capture_image ci ON ci.session_id = cs.id
+            WHERE cs.state::text = %s
+            GROUP BY cs.id
+            HAVING MAX(ci.created_at) IS NULL
+               OR MAX(ci.created_at) > %s
+        ) waiting
+        """
+    ).format(sql.Identifier(schema), sql.Identifier(schema))
+    with conn.cursor(row_factory=dict_row) as cur:
+        cur.execute(query, (lifecycle_config.open_state, cutoff))
+        row = cur.fetchone()
+    return int(row["waiting_count"]) if row is not None else 0
+
+
+def _domain_event_type_name(event: Any) -> str:
+    if isinstance(event, schedule_diff.ShiftAdded):
+        return "shift_added"
+    if isinstance(event, schedule_diff.ShiftRemoved):
+        return "shift_removed"
+    if isinstance(event, schedule_diff.ShiftTimeChanged):
+        return "shift_time_changed"
+    if isinstance(event, schedule_diff.ShiftRelocated):
+        return "shift_relocated"
+    if isinstance(event, schedule_diff.ShiftRetitled):
+        return "shift_retitled"
+    if isinstance(event, schedule_diff.ShiftReclassified):
+        return "shift_reclassified"
+    return type(event).__name__
 
 
 def _parse_positive_float_env(name: str, default: float) -> float:
