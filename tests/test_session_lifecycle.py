@@ -185,9 +185,13 @@ class SessionLifecycleIntegrationTests(unittest.TestCase):
 
         def build_notifications(events: list[dict[str, str]]) -> list[dict[str, str]]:
             notifications = [{"id": f"n-{event['event_id']}"} for event in events]
-            emitted_notifications.extend(notifications)
             process_calls.append("notify")
             return notifications
+
+        def store_notifications(_conn: Any, _schema: str, _session_id: str, notifications: list[dict[str, str]]) -> int:
+            emitted_notifications.extend(notifications)
+            process_calls.append("store")
+            return len(notifications)
 
         with psycopg.connect(DB_URL) as conn:
             with conn.transaction():
@@ -199,6 +203,7 @@ class SessionLifecycleIntegrationTests(unittest.TestCase):
                     run_full_pipeline=run_full_pipeline,
                     persist_events_and_snapshot=persist_events_and_snapshot,
                     build_notifications=build_notifications,
+                    store_notifications=store_notifications,
                     config=self.config,
                 )
             with conn.transaction():
@@ -210,6 +215,7 @@ class SessionLifecycleIntegrationTests(unittest.TestCase):
                     run_full_pipeline=run_full_pipeline,
                     persist_events_and_snapshot=persist_events_and_snapshot,
                     build_notifications=build_notifications,
+                    store_notifications=store_notifications,
                     config=self.config,
                 )
 
@@ -218,6 +224,7 @@ class SessionLifecycleIntegrationTests(unittest.TestCase):
         self.assertEqual(len(emitted_notifications), 1)
         self.assertEqual(self._session_state(session_id), "done")
         self.assertEqual(process_calls.count("notify"), 1)
+        self.assertEqual(process_calls.count("store"), 1)
 
 
 if __name__ == "__main__":

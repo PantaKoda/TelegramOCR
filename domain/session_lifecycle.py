@@ -129,12 +129,15 @@ def process_finalized_session(
     run_full_pipeline: Callable[[list[Any]], Any],
     persist_events_and_snapshot: Callable[[Any, str, str, Any], list[Any]],
     build_notifications: Callable[[list[Any]], list[Any]],
+    store_notifications: Callable[[Any, str, str, list[Any]], int] | None = None,
     mark_processed: Callable[[Any, str, str], bool] | None = None,
 ) -> list[Any]:
     images = load_session_images(conn, schema, session_id)
     pipeline_output = run_full_pipeline(images)
     events = persist_events_and_snapshot(conn, schema, session_id, pipeline_output)
     notifications = build_notifications(events)
+    if store_notifications is not None:
+        store_notifications(conn, schema, session_id, notifications)
 
     marker = mark_processed or (lambda inner_conn, inner_schema, inner_session_id: mark_session_processed(inner_conn, inner_schema, inner_session_id))
     applied = marker(conn, schema, session_id)
@@ -152,6 +155,7 @@ def run_lifecycle_once(
     run_full_pipeline: Callable[[list[Any]], Any],
     persist_events_and_snapshot: Callable[[Any, str, str, Any], list[Any]],
     build_notifications: Callable[[list[Any]], list[Any]],
+    store_notifications: Callable[[Any, str, str, list[Any]], int] | None = None,
     config: SessionLifecycleConfig | None = None,
 ) -> list[tuple[str, list[Any]]]:
     lifecycle = config or SessionLifecycleConfig()
@@ -170,6 +174,7 @@ def run_lifecycle_once(
             run_full_pipeline=run_full_pipeline,
             persist_events_and_snapshot=persist_events_and_snapshot,
             build_notifications=build_notifications,
+            store_notifications=store_notifications,
             mark_processed=lambda inner_conn, inner_schema, inner_session_id: mark_session_processed(
                 inner_conn,
                 inner_schema,
