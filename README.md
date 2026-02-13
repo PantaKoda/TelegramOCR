@@ -1,4 +1,4 @@
-# OCR Worker (Phase 3.5 Worker + Phase 5 OCR Adapter + Phase 6/6.5 Semantics + Phase 7 Diff + Phase 8 Aggregation + Phase 9 Event Store + Phase 10 Notifications + Phase 11 Lifecycle Gate + Phase 12 Notification Store)
+# OCR Worker (Phase 3.5 Worker + Phase 5 OCR Adapter + Phase 6/6.5 Semantics + Phase 7 Diff + Phase 8 Aggregation + Phase 9 Event Store + Phase 10 Notifications + Phase 11 Lifecycle Gate + Phase 12 Notification Store + Phase 13 Background Deployment Loop)
 
 Current state:
 
@@ -12,6 +12,7 @@ Current state:
 - Phase 10 adds deterministic event-to-human notification rules (`domain/notification_rules.py`)
 - Phase 11 adds deterministic idle/finalization lifecycle gating (`domain/session_lifecycle.py`)
 - Phase 12 adds durable notification persistence (`infra/notification_store.py`)
+- Phase 13 adds continuously running worker runtime + Docker deployment (`worker/run_forever.py`, `Dockerfile`)
 
 Phase 3.5 worker capabilities:
 
@@ -172,6 +173,26 @@ Phase 12 notification-store capabilities (infrastructure persistence):
   - `events -> build_notifications(events) -> store_notifications(notifications)`
   - one processing run per finalized session persists notifications once
 
+Phase 13 background runtime capabilities:
+
+- dedicated long-running worker module: `worker/run_forever.py`
+- infinite lifecycle loop:
+  - run one lifecycle iteration
+  - sleep `WORKER_POLL_SECONDS`
+  - repeat forever
+- resilient operation:
+  - per-iteration exception handling with stdout logging
+  - process continues after errors
+- iteration logs include:
+  - iteration start/end
+  - processed session count
+  - generated and stored notification counts
+- no HTTP server and no exposed ports
+- Docker runtime image included:
+  - base: `python:3.11-slim`
+  - dependency install: `uv sync --frozen --no-dev --no-install-project`
+  - default command: `python -m worker.run_forever`
+
 ## Setup
 
 ```bash
@@ -204,6 +225,7 @@ Optional:
 
 - `DB_SCHEMA` (default: `schedule_ingest`)
 - `FIXTURE_PAYLOAD_PATH` (default: `fixtures/sample_schedule.json`)
+- `WORKER_POLL_SECONDS` (default: `5`)
 - `ENABLE_CHAOS_PARSER` (default: `false`)
 - `CHAOS_SEED` (default: `0`)
 - `WORKER_ID` (default: `worker-<pid>`)
@@ -216,6 +238,7 @@ Optional:
 - `PROCESSING_STATE` (default: `processing`)
 - `DONE_STATE` (default: `done`)
 - `FAILED_STATE` (default: `failed`)
+- `PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK` (optional, recommended: `True` for container runtime)
 
 ## Fixture Payload Contract
 
@@ -259,6 +282,37 @@ uv run python main.py
 ```
 
 The worker runs one claim/process cycle and exits.
+
+## Run Forever (Background Worker)
+
+```bash
+uv run python -m worker.run_forever
+```
+
+The worker loops forever and periodically processes finalizable sessions.
+
+## Docker Deployment
+
+Build:
+
+```bash
+docker build -t telegram-ocr-worker:latest .
+```
+
+Run:
+
+```bash
+docker run --rm \
+  -e DATABASE_URL="$DATABASE_URL" \
+  -e WORKER_POLL_SECONDS=5 \
+  -e SESSION_IDLE_TIMEOUT_SECONDS=25 \
+  -e PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK=True \
+  telegram-ocr-worker:latest
+```
+
+Notes:
+- no ports are exposed
+- logs are emitted to stdout only
 
 ## How To Test
 
