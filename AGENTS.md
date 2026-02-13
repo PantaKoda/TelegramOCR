@@ -205,6 +205,19 @@ If the date cannot be resolved or is inconsistent:
   - adapter contract is thin conversion only: Paddle polygon/text/score -> `Box` geometry (`x`, `y`, `w`, `h`) + confidence
   - no filtering, grouping, normalization, or semantic cleanup in adapter
   - real-screenshot golden tests added in `tests/test_ocr_golden_samples.py` with fixtures under `tests/ocr_samples/`
+- Phase 6 semantic normalizer (pre-worker wiring):
+  - deterministic semantic normalization module in `parser/semantic_normalizer.py`
+  - address decomposition into `street`, `street_number`, `postal_code`, `postal_area`, `city`
+  - customer/title cleanup with whitespace collapse, casing normalization, and company-noise token removal
+  - deterministic shift classification tags: `SCHOOL`, `OFFICE`, `HOME_VISIT`, `UNKNOWN`
+  - canonical output now includes deterministic identity keys: `location_fingerprint`, `customer_fingerprint`
+  - normalization tests in `tests/test_semantic_normalizer.py` (accent loss, missing postal code, multiline address join, OCR noise, canonical-location variants)
+- Phase 6.5 entity identity (pre-worker wiring):
+  - deterministic fingerprint module in `parser/entity_identity.py`
+  - `location_fingerprint` from normalized semantic location fields (`street`, `street_number`, `postal_area|city`)
+  - OCR confusion normalization in fingerprinting (`0/O`, `1/l/I`, accents, whitespace/case)
+  - `customer_fingerprint` from normalized customer tokens with company-noise removal and order-insensitive initial folding
+  - identity tests in `tests/test_entity_identity.py` (address variants, city typo confusion, different address separation, customer spelling variants)
 - Worker runtime is still fixture-driven (`main.py`); OCR adapter is validated separately and not yet used for DB write path
 
 ---

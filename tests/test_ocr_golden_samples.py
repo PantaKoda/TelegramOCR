@@ -11,6 +11,7 @@ from PIL import Image
 
 from ocr.paddle_adapter import create_paddle_ocr, ensure_paddle_available, run_paddle_on_image
 from parser.layout_parser import parse_layout
+from parser.semantic_normalizer import normalize_entries
 
 SAMPLES_DIR = Path(__file__).resolve().parent / "ocr_samples"
 TIME_RANGE_RE = re.compile(r"\b\d{1,2}[:.]\d{2}(?:\s*-\s*\d{1,2}[:.]\d{2})?\b")
@@ -99,6 +100,31 @@ class OCRGoldenSamplesTests(unittest.TestCase):
 
         corrupted_entries = parse_layout(corrupted_boxes)
         self.assertEqual(_entry_structure_signature(baseline_entries), _entry_structure_signature(corrupted_entries))
+
+    def test_same_screenshot_repeated_capture_keeps_same_canonical_payload_hash(self) -> None:
+        image = SAMPLES_DIR / "sample1.png"
+        hashes: list[str] = []
+        run_markers = ["2026-02-13T10:00:00Z", "2026-02-13T18:45:00Z"]
+
+        # Simulate repeated captures at different moments.
+        for marker in run_markers:
+            _ = marker  # Explicitly vary run context; canonical payload must remain unchanged.
+            boxes = run_paddle_on_image(image, ocr=self.ocr)
+            layout_entries = parse_layout(boxes)
+            canonical_entries = [asdict(entry) for entry in normalize_entries(layout_entries)]
+            canonical_entries.sort(
+                key=lambda item: (
+                    item["start"],
+                    item["end"],
+                    item["location_fingerprint"],
+                    item["customer_fingerprint"],
+                )
+            )
+            payload = {"schedule_date": "2026-08-22", "entries": canonical_entries}
+            payload_text = json.dumps(payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
+            hashes.append(sha256(payload_text.encode("utf-8")).hexdigest())
+
+        self.assertEqual(len(set(hashes)), 1)
 
 
 def _corrupt_non_time_text(text: str) -> str:
