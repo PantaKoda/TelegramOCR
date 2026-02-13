@@ -19,7 +19,7 @@ Phase 3.5 worker capabilities:
 - PostgreSQL connectivity
 - at-most-one session claim per run using `FOR UPDATE SKIP LOCKED`
 - lease semantics:
-  - prefers `state = 'pending'`
+  - prefers `state = 'closed'`
   - reclaims stale `state = 'processing'` when lease is expired
 - fixture-driven payload input from local JSON (`fixtures/sample_schedule.json`)
 - optional deterministic chaos parser (seeded format noise)
@@ -150,7 +150,7 @@ Phase 10 notification-rule capabilities:
 Phase 11 session-lifecycle capabilities (module-level, pre-worker wiring):
 
 - detects finalizable sessions when:
-  - session is in configurable `open_state` (default: `pending`)
+  - session is in configurable `open_state` (default: `closed`)
   - session has at least one image
   - `now - max(capture_image.created_at) >= idle_timeout_seconds` (default: `25s`)
 - finalization gate is atomic:
@@ -259,8 +259,10 @@ Optional:
 - `ENABLE_LEASE_HEARTBEAT` (default: `true`)
 - `SIMULATED_WORK_SECONDS` (default: `0`, test hook)
 - `SESSION_IDLE_TIMEOUT_SECONDS` (default: `25`, used by `domain/session_lifecycle.py`)
-- `PENDING_STATE` (default: `pending`)
+- `OPEN_STATE` (default: `closed`)
+- `PENDING_STATE` (legacy alias for `OPEN_STATE`)
 - `PROCESSING_STATE` (default: `processing`)
+- `PROCESSED_STATE` (default: `done`)
 - `DONE_STATE` (default: `done`)
 - `FAILED_STATE` (default: `failed`)
 - `PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK` (optional, recommended: `True` for container runtime)

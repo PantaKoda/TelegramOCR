@@ -252,7 +252,7 @@ class RunForeverIterationIntegrationTests(unittest.TestCase):
                     INSERT INTO {self.schema}.capture_session (id, user_id, state)
                     VALUES (%s, %s, %s)
                     """,
-                    (session_id, 8225717176, "pending"),
+                    (session_id, 8225717176, "closed"),
                 )
                 cur.execute(
                     f"""

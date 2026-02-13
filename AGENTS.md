@@ -106,7 +106,7 @@ The following tools and libraries **must be used** unless explicitly discussed a
 You are implementing the **Python OCR worker only**.
 
 You are responsible for:
-- Polling PostgreSQL for sessions in `state = processing`
+- Polling PostgreSQL for finalizable sessions in upload-complete `open_state` (current contract: `closed`)
 - Loading session images (ordered by sequence)
 - Running OCR using PaddleOCR
 - Parsing UI layout into structured schedule data
@@ -127,15 +127,14 @@ PostgreSQL is the **only integration boundary**.
 ## Session Lifecycle (Authoritative)
 
 ```
-
-pending → processing → done | failed
+open → closed → processing → done | failed
 
 ```
 
 Rules:
-- Workers claim with `FOR UPDATE SKIP LOCKED`
-- `processing` rows may be reclaimed only when lease is stale
-- Each session must be finalized exactly once
+- C# controls upload flow states (`open`, then `closed` when upload completes)
+- Python claims only finalized open-state rows (`closed`) and transitions `closed -> processing`
+- Python finalizes each claimed session exactly once to `done` or `failed`
 
 ---
 
@@ -259,7 +258,7 @@ If the date cannot be resolved or is inconsistent:
   - deterministic lifecycle module in `domain/session_lifecycle.py`
   - detects finalizable sessions by idle timeout from latest image timestamp (`MAX(capture_image.created_at)`)
   - idle timeout is environment-configurable via `SESSION_IDLE_TIMEOUT_SECONDS` (default: `25`)
-  - lifecycle query requires at least one image and a configurable `open_state` (default: `pending` for current DB contract)
+  - lifecycle query requires at least one image and a configurable `open_state` (default: `closed` for current DB contract)
   - atomic finalize gate: `open_state -> processing_state` only when session is still open
   - deterministic once-per-session processing helper: finalizable scan -> finalize -> process callbacks -> processed-state mark
   - processed transition is ownership-safe at SQL update level by requiring `processing_state` at update time

@@ -27,6 +27,7 @@ class SessionLifecycleConfigTests(unittest.TestCase):
     def test_uses_default_when_env_is_missing(self) -> None:
         config = load_lifecycle_config_from_env()
         self.assertEqual(config.idle_timeout_seconds, 25)
+        self.assertEqual(config.open_state, "closed")
 
     def test_rejects_invalid_idle_timeout_value(self) -> None:
         with self.assertRaisesRegex(ValueError, "must be an integer"):
@@ -35,6 +36,22 @@ class SessionLifecycleConfigTests(unittest.TestCase):
     def test_rejects_negative_idle_timeout(self) -> None:
         with self.assertRaisesRegex(ValueError, "must be >= 0"):
             load_lifecycle_config_from_env(env={"SESSION_IDLE_TIMEOUT_SECONDS": "-1"})
+
+    def test_loads_state_overrides_from_env(self) -> None:
+        config = load_lifecycle_config_from_env(
+            env={
+                "OPEN_STATE": "closed",
+                "PROCESSING_STATE": "processing",
+                "PROCESSED_STATE": "done",
+            }
+        )
+        self.assertEqual(config.open_state, "closed")
+        self.assertEqual(config.processing_state, "processing")
+        self.assertEqual(config.processed_state, "done")
+
+    def test_supports_pending_state_alias(self) -> None:
+        config = load_lifecycle_config_from_env(env={"PENDING_STATE": "closed"})
+        self.assertEqual(config.open_state, "closed")
 
 
 @unittest.skipUnless(DB_URL, "Integration test requires TEST_DATABASE_URL or DATABASE_URL")
@@ -75,7 +92,7 @@ class SessionLifecycleIntegrationTests(unittest.TestCase):
                     """
                 )
 
-    def _seed_session(self, *, state: str = "pending", user_id: int = 8225717176) -> str:
+    def _seed_session(self, *, state: str = "closed", user_id: int = 8225717176) -> str:
         session_id = str(uuid.uuid4())
         with psycopg.connect(DB_URL, autocommit=True) as conn:
             with conn.cursor() as cur:
@@ -111,7 +128,7 @@ class SessionLifecycleIntegrationTests(unittest.TestCase):
 
     def test_uploading_images_quickly_is_not_finalized(self) -> None:
         now = datetime.now(timezone.utc)
-        session_id = self._seed_session(state="pending")
+        session_id = self._seed_session(state="closed")
         self._add_image(session_id=session_id, sequence=1, created_at=now - timedelta(seconds=5))
 
         with psycopg.connect(DB_URL) as conn:
@@ -121,7 +138,7 @@ class SessionLifecycleIntegrationTests(unittest.TestCase):
 
     def test_idle_timeout_passes_session_becomes_finalizable_and_finalized(self) -> None:
         now = datetime.now(timezone.utc)
-        session_id = self._seed_session(state="pending")
+        session_id = self._seed_session(state="closed")
         self._add_image(session_id=session_id, sequence=1, created_at=now - timedelta(seconds=40))
 
         with psycopg.connect(DB_URL) as conn:
@@ -135,7 +152,7 @@ class SessionLifecycleIntegrationTests(unittest.TestCase):
 
     def test_double_worker_race_processes_once(self) -> None:
         now = datetime.now(timezone.utc)
-        session_id = self._seed_session(state="pending")
+        session_id = self._seed_session(state="closed")
         self._add_image(session_id=session_id, sequence=1, created_at=now - timedelta(seconds=40))
 
         results: list[bool] = []
@@ -164,7 +181,7 @@ class SessionLifecycleIntegrationTests(unittest.TestCase):
 
     def test_notifications_emitted_only_once_for_finalized_session(self) -> None:
         now = datetime.now(timezone.utc)
-        session_id = self._seed_session(state="pending")
+        session_id = self._seed_session(state="closed")
         self._add_image(session_id=session_id, sequence=1, created_at=now - timedelta(seconds=60))
         self._add_image(session_id=session_id, sequence=2, created_at=now - timedelta(seconds=50))
 
