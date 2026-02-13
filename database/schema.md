@@ -155,6 +155,32 @@ Idempotency rule:
   - `(user_id, schedule_date, location_fingerprint, event_type, old_value_hash, new_value_hash)`
 - Prevents duplicate semantic events when a session/process is retried
 
+## Table: `schedule_notification` (Phase 12/13)
+
+Purpose: durable outbound message queue for bot delivery.
+
+Columns:
+
+- `notification_id` text PK
+- `user_id` bigint NOT NULL
+- `schedule_date` date NOT NULL
+- `source_session_id` uuid NOT NULL
+- `status` text NOT NULL (`pending|sent|failed`)
+- `notification_type` text NOT NULL (`event|summary`)
+- `message` text NOT NULL
+- `event_ids` jsonb NOT NULL (array)
+- `created_at` timestamptz NOT NULL
+- `sent_at` timestamptz NULL
+
+Rules:
+
+- Python worker inserts pending notifications only (idempotent on `notification_id`)
+- C# delivery layer consumes rows with `status='pending'`
+- Delivery updates row state to:
+  - `sent` + `sent_at` when delivery succeeds
+  - `failed` when delivery fails
+- Worker restart must not duplicate rows (same deterministic `notification_id` + conflict-ignore insert)
+
 ## Worker Responsibilities (Current Phase)
 
 - Claim one session with `FOR UPDATE SKIP LOCKED` and lease rules
@@ -175,6 +201,17 @@ Idempotency rule:
 - Mark session `done` on success
 - Mark session `failed` with `error` on failure
 - Let DB triggers manage `day_schedule`
+
+## Background Runtime Responsibilities (Phase 13)
+
+- Run forever (no HTTP endpoint, no exposed ports)
+- Per iteration:
+  - detect finalizable sessions by idle timeout
+  - process finalized session once
+  - persist semantic events/snapshot
+  - persist pending notifications
+- Sleep between iterations (`WORKER_POLL_SECONDS`)
+- Log iteration start/end/errors to stdout
 
 ## Event Store Responsibilities (Phase 9)
 

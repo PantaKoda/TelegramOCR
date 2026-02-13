@@ -136,13 +136,13 @@ def process_finalized_session(
     pipeline_output = run_full_pipeline(images)
     events = persist_events_and_snapshot(conn, schema, session_id, pipeline_output)
     notifications = build_notifications(events)
-    if store_notifications is not None:
-        store_notifications(conn, schema, session_id, notifications)
 
     marker = mark_processed or (lambda inner_conn, inner_schema, inner_session_id: mark_session_processed(inner_conn, inner_schema, inner_session_id))
     applied = marker(conn, schema, session_id)
     if not applied:
         return []
+    if store_notifications is not None:
+        store_notifications(conn, schema, session_id, notifications)
     return notifications
 
 
