@@ -265,6 +265,7 @@ If the date cannot be resolved or is inconsistent:
   - atomic finalize gate: `open_state -> processing_state` only when session is still open
   - deterministic once-per-session processing helper: finalizable scan -> finalize -> process callbacks -> processed-state mark
   - processed transition is ownership-safe at SQL update level by requiring `processing_state` at update time
+  - per-session processing exceptions now transition `processing -> failed` within the same lifecycle pass to prevent infinite retry loops on irrecoverable OCR/runtime errors
   - tests in `tests/test_session_lifecycle.py` cover: not-finalized-while-active, idle-finalizable transition, finalize race safety, and single notification emission across reruns
 - Phase 12 notification persistence (pre-Telegram delivery wiring):
   - infrastructure module in `infra/notification_store.py`
@@ -292,7 +293,7 @@ If the date cannot be resolved or is inconsistent:
   - persists notifications via `infra/notification_store.py` after successful session processing
   - runtime input mode is environment-driven (`WORKER_INPUT_MODE=fixture|ocr`) to support dev/prod switching without code changes
   - OCR adapter import is lazy in `worker/run_forever.py` and activated only when `WORKER_INPUT_MODE=ocr` (prevents fixture-mode startup failures from optional OCR runtime dependencies)
-  - Docker runtime added (`Dockerfile`) with `python:3.11-slim` base, `uv sync --frozen` dependency install, and OpenCV/Paddle shared libs (`libgl1`, `libglib2.0-0`, `libsm6`, `libxext6`, `libxrender1`)
+  - Docker runtime added (`Dockerfile`) with `python:3.11-slim` base, `uv sync --frozen` dependency install, and OpenCV/Paddle shared libs (`libgl1`, `libglib2.0-0`, `libgomp1`, `libsm6`, `libxext6`, `libxrender1`)
 
 ---
 

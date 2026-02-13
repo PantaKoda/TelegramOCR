@@ -17,6 +17,7 @@ class SessionLifecycleConfig:
     open_state: str = "closed"
     processing_state: str = "processing"
     processed_state: str = "done"
+    failed_state: str = "failed"
 
 
 def load_lifecycle_config_from_env(
@@ -39,12 +40,14 @@ def load_lifecycle_config_from_env(
     open_state = _read_state_env(source, "OPEN_STATE", "PENDING_STATE") or base.open_state
     processing_state = _read_state_env(source, "PROCESSING_STATE") or base.processing_state
     processed_state = _read_state_env(source, "PROCESSED_STATE", "DONE_STATE") or base.processed_state
+    failed_state = _read_state_env(source, "FAILED_STATE") or base.failed_state
 
     return SessionLifecycleConfig(
         idle_timeout_seconds=idle_timeout_seconds,
         open_state=open_state,
         processing_state=processing_state,
         processed_state=processed_state,
+        failed_state=failed_state,
     )
 
 
@@ -123,6 +126,28 @@ def mark_session_processed(
         return cur.rowcount == 1
 
 
+def mark_session_failed(
+    conn: Any,
+    schema: str,
+    session_id: str,
+    *,
+    config: SessionLifecycleConfig | None = None,
+) -> bool:
+    lifecycle = config or SessionLifecycleConfig()
+    query = sql.SQL(
+        """
+        UPDATE {}.capture_session
+        SET state = %s
+        WHERE id = %s
+          AND state::text = %s
+        """
+    ).format(sql.Identifier(schema))
+
+    with conn.cursor() as cur:
+        cur.execute(query, (lifecycle.failed_state, session_id, lifecycle.processing_state))
+        return cur.rowcount == 1
+
+
 def process_finalized_session(
     conn: Any,
     schema: str,
@@ -161,6 +186,7 @@ def run_lifecycle_once(
     store_notifications: Callable[[Any, str, str, list[Any]], int] | None = None,
     on_session_finalized: Callable[[str], None] | None = None,
     on_session_processed: Callable[[str, list[Any]], None] | None = None,
+    on_session_failed: Callable[[str, Exception, bool], None] | None = None,
     config: SessionLifecycleConfig | None = None,
 ) -> list[tuple[str, list[Any]]]:
     lifecycle = config or SessionLifecycleConfig()
@@ -173,22 +199,28 @@ def run_lifecycle_once(
             continue
         if on_session_finalized is not None:
             on_session_finalized(session_id)
-        notifications = process_finalized_session(
-            conn,
-            schema,
-            session_id,
-            load_session_images=load_session_images,
-            run_full_pipeline=run_full_pipeline,
-            persist_events_and_snapshot=persist_events_and_snapshot,
-            build_notifications=build_notifications,
-            store_notifications=store_notifications,
-            mark_processed=lambda inner_conn, inner_schema, inner_session_id: mark_session_processed(
-                inner_conn,
-                inner_schema,
-                inner_session_id,
-                config=lifecycle,
-            ),
-        )
+        try:
+            notifications = process_finalized_session(
+                conn,
+                schema,
+                session_id,
+                load_session_images=load_session_images,
+                run_full_pipeline=run_full_pipeline,
+                persist_events_and_snapshot=persist_events_and_snapshot,
+                build_notifications=build_notifications,
+                store_notifications=store_notifications,
+                mark_processed=lambda inner_conn, inner_schema, inner_session_id: mark_session_processed(
+                    inner_conn,
+                    inner_schema,
+                    inner_session_id,
+                    config=lifecycle,
+                ),
+            )
+        except Exception as error:
+            marked_failed = mark_session_failed(conn, schema, session_id, config=lifecycle)
+            if on_session_failed is not None:
+                on_session_failed(session_id, error, marked_failed)
+            continue
         if notifications is None:
             continue
         finalized.append((session_id, notifications))
