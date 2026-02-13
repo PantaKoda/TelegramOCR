@@ -28,6 +28,40 @@ def _added_event(*, event_id: str, source_session_id: str, schedule_date: str = 
     }
 
 
+def _time_changed_event(
+    *,
+    event_id: str,
+    source_session_id: str,
+    old_start: str,
+    old_end: str,
+    new_start: str,
+    new_end: str,
+) -> dict:
+    return {
+        "event_id": event_id,
+        "user_id": 8225717176,
+        "schedule_date": "2026-08-22",
+        "event_type": EVENT_TYPE_SHIFT_TIME_CHANGED,
+        "location_fingerprint": "loc-1",
+        "customer_fingerprint": "cust-1",
+        "old_value": {
+            "start": old_start,
+            "end": old_end,
+            "city": "Billdal",
+            "shift_type": "HOME_VISIT",
+            "customer_name": "Marie Sjoberg",
+        },
+        "new_value": {
+            "start": new_start,
+            "end": new_end,
+            "city": "Billdal",
+            "shift_type": "HOME_VISIT",
+            "customer_name": "Marie Sjoberg",
+        },
+        "source_session_id": source_session_id,
+    }
+
+
 class NotificationRulesTests(unittest.TestCase):
     def test_single_event_returns_single_message(self) -> None:
         events = [_added_event(event_id="e1", source_session_id="s1")]
@@ -107,6 +141,57 @@ class NotificationRulesTests(unittest.TestCase):
         notifications = build_notifications(events, summary_threshold=10)
 
         self.assertEqual([item.event_ids[0] for item in notifications], ["e3", "e1", "e2", "e4"])
+
+    def test_shift_time_changed_message_for_start_only_change(self) -> None:
+        events = [
+            _time_changed_event(
+                event_id="e1",
+                source_session_id="s1",
+                old_start="10:00",
+                old_end="14:00",
+                new_start="11:00",
+                new_end="14:00",
+            )
+        ]
+        notifications = build_notifications(events, today=date(2026, 8, 21))
+        self.assertEqual(
+            notifications[0].message,
+            "Tomorrow Billdal shift moved 10:00 → 11:00",
+        )
+
+    def test_shift_time_changed_message_for_end_only_change(self) -> None:
+        events = [
+            _time_changed_event(
+                event_id="e1",
+                source_session_id="s1",
+                old_start="10:00",
+                old_end="14:00",
+                new_start="10:00",
+                new_end="15:00",
+            )
+        ]
+        notifications = build_notifications(events, today=date(2026, 8, 21))
+        self.assertEqual(
+            notifications[0].message,
+            "Tomorrow Billdal shift moved ends 14:00 → 15:00",
+        )
+
+    def test_shift_time_changed_message_for_full_range_change(self) -> None:
+        events = [
+            _time_changed_event(
+                event_id="e1",
+                source_session_id="s1",
+                old_start="10:00",
+                old_end="14:00",
+                new_start="11:00",
+                new_end="15:00",
+            )
+        ]
+        notifications = build_notifications(events, today=date(2026, 8, 21))
+        self.assertEqual(
+            notifications[0].message,
+            "Tomorrow Billdal shift moved 10:00–14:00 → 11:00–15:00",
+        )
 
 
 if __name__ == "__main__":

@@ -138,6 +138,10 @@ Phase 10 notification-rule capabilities:
   - `shift_reclassified`
   - `shift_retitled`
 - uses canonical fields only (`start`, `end`, `city`, `shift_type`, `customer_name`)
+- `shift_time_changed` rendering is range-aware:
+  - start-only change -> `old_start -> new_start`
+  - end-only change -> `ends old_end -> new_end`
+  - full-range change -> `old_start-old_end -> new_start-new_end`
 - noise suppression:
   - if event count for same `(user_id, date, source_session)` reaches threshold (default `3`), emits one summary notification
 - replay dedupe:

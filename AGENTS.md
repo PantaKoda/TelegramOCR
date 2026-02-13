@@ -248,6 +248,10 @@ If the date cannot be resolved or is inconsistent:
 - Phase 10 notification rules (human-facing interpretation layer):
   - deterministic notification mapper in `domain/notification_rules.py`
   - translates semantic events into user-facing sentences using canonical fields only
+  - `shift_time_changed` wording is time-range aware:
+    - start-only change: `old_start -> new_start`
+    - end-only change: `ends old_end -> new_end`
+    - full-range change: `old_start-old_end -> new_start-new_end`
   - supports per-day/session summary suppression to avoid notification storms (default threshold: 3 changes)
   - supports replay dedupe via `already_notified_event_ids` so repeated event fetches do not re-notify
   - tests in `tests/test_notification_rules.py` cover single-event messaging, summary mode, no-change output, and replay dedupe
