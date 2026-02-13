@@ -131,7 +131,7 @@ def process_finalized_session(
     build_notifications: Callable[[list[Any]], list[Any]],
     store_notifications: Callable[[Any, str, str, list[Any]], int] | None = None,
     mark_processed: Callable[[Any, str, str], bool] | None = None,
-) -> list[Any]:
+) -> list[Any] | None:
     images = load_session_images(conn, schema, session_id)
     pipeline_output = run_full_pipeline(images)
     events = persist_events_and_snapshot(conn, schema, session_id, pipeline_output)
@@ -140,7 +140,7 @@ def process_finalized_session(
     marker = mark_processed or (lambda inner_conn, inner_schema, inner_session_id: mark_session_processed(inner_conn, inner_schema, inner_session_id))
     applied = marker(conn, schema, session_id)
     if not applied:
-        return []
+        return None
     if store_notifications is not None:
         store_notifications(conn, schema, session_id, notifications)
     return notifications
@@ -156,6 +156,8 @@ def run_lifecycle_once(
     persist_events_and_snapshot: Callable[[Any, str, str, Any], list[Any]],
     build_notifications: Callable[[list[Any]], list[Any]],
     store_notifications: Callable[[Any, str, str, list[Any]], int] | None = None,
+    on_session_finalized: Callable[[str], None] | None = None,
+    on_session_processed: Callable[[str, list[Any]], None] | None = None,
     config: SessionLifecycleConfig | None = None,
 ) -> list[tuple[str, list[Any]]]:
     lifecycle = config or SessionLifecycleConfig()
@@ -166,6 +168,8 @@ def run_lifecycle_once(
         claimed = finalize_session(conn, schema, session_id, config=lifecycle)
         if not claimed:
             continue
+        if on_session_finalized is not None:
+            on_session_finalized(session_id)
         notifications = process_finalized_session(
             conn,
             schema,
@@ -182,7 +186,11 @@ def run_lifecycle_once(
                 config=lifecycle,
             ),
         )
+        if notifications is None:
+            continue
         finalized.append((session_id, notifications))
+        if on_session_processed is not None:
+            on_session_processed(session_id, notifications)
     return finalized
 
 

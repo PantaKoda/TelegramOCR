@@ -2,14 +2,17 @@ import os
 import tempfile
 import uuid
 import unittest
+import logging
 from datetime import date
 from unittest.mock import patch
+import json
 
 import psycopg
 from psycopg.rows import dict_row
 
 from domain.session_lifecycle import SessionLifecycleConfig
 from worker.run_forever import (
+    JsonFormatter,
     WorkerRuntimeConfig,
     _coerce_fixture_entries,
     _parse_schedule_date,
@@ -62,6 +65,31 @@ class RunForeverConfigTests(unittest.TestCase):
         with patch.dict(os.environ, env, clear=True):
             with self.assertRaisesRegex(RuntimeError, "WORKER_POLL_SECONDS"):
                 load_runtime_config()
+
+
+class RunForeverLoggingTests(unittest.TestCase):
+    def test_json_formatter_emits_required_core_fields(self) -> None:
+        record = logging.LogRecord(
+            name="ocr-worker-loop",
+            level=logging.INFO,
+            pathname=__file__,
+            lineno=10,
+            msg="test message",
+            args=(),
+            exc_info=None,
+        )
+        record.event = "worker.test"
+        record.session_id = "session-1"
+        record.user_id = 123
+        record.correlation_id = "session-1"
+
+        payload = json.loads(JsonFormatter().format(record))
+        self.assertEqual(payload["service"], "python-worker")
+        self.assertEqual(payload["event"], "worker.test")
+        self.assertEqual(payload["session_id"], "session-1")
+        self.assertEqual(payload["user_id"], 123)
+        self.assertEqual(payload["correlation_id"], "session-1")
+        self.assertTrue(payload["timestamp"].endswith("Z"))
 
 
 class RunForeverFixtureParsingTests(unittest.TestCase):

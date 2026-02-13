@@ -187,10 +187,31 @@ Phase 13 background runtime capabilities:
 - resilient operation:
   - per-iteration exception handling with stdout logging
   - process continues after errors
+- structured JSON logging contract:
+  - core fields on every log line:
+    - `timestamp` (UTC, ISO-8601 with `Z`)
+    - `service` (`python-worker`)
+    - `level`
+    - `event`
+    - `session_id`
+    - `user_id`
+    - `correlation_id` (session scoped)
 - iteration logs include:
   - iteration start/end
   - processed session count
   - generated and stored notification counts
+- semantic event logs include:
+  - `session.skipped_idle`
+  - `session.finalized`
+  - `session.processed`
+  - `session.images_loaded`
+  - `ocr.completed`
+  - `layout.shifts_detected`
+  - `aggregation.completed`
+  - `diff.computed`
+  - `events.persisted`
+  - `notifications.generated`
+  - `notifications.stored`
 - no HTTP server and no exposed ports
 - Docker runtime image included:
   - base: `python:3.11-slim`

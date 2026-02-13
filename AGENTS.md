@@ -278,6 +278,14 @@ If the date cannot be resolved or is inconsistent:
   - executes `run_lifecycle_once()` periodically (`WORKER_POLL_SECONDS`, default: `5`)
   - uses `SESSION_IDLE_TIMEOUT_SECONDS` lifecycle config to process only idle/finalizable sessions
   - loop catches/logs iteration errors and continues running (stdout-only logs)
+  - all runtime logs are structured JSON with core fields:
+    - `timestamp` (UTC), `service`, `level`, `event`, `session_id`, `user_id`, `correlation_id`
+  - semantic runtime events logged:
+    - `session.skipped_idle`, `session.finalized`, `session.processed`, `session.images_loaded`
+    - `ocr.completed`, `layout.shifts_detected`, `aggregation.completed`
+    - `diff.computed`, `events.persisted`, `notifications.generated`, `notifications.stored`
+  - iteration error logs include:
+    - `error.type`, `error.message`, `error.stage` (`ocr|layout|diff|db|lifecycle`)
   - persists notifications via `infra/notification_store.py` after successful session processing
   - runtime remains deterministic and fixture-driven for payload generation (`FIXTURE_PAYLOAD_PATH`)
   - Docker runtime added (`Dockerfile`) with `python:3.11-slim` base and `uv sync --frozen` dependency install
