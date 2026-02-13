@@ -1,4 +1,4 @@
-# OCR Worker (Phase 3.5 Worker + Phase 5 OCR Adapter + Phase 6/6.5 Semantics + Phase 7 Diff + Phase 8 Aggregation + Phase 9 Event Store + Phase 10 Notifications + Phase 11 Lifecycle Gate)
+# OCR Worker (Phase 3.5 Worker + Phase 5 OCR Adapter + Phase 6/6.5 Semantics + Phase 7 Diff + Phase 8 Aggregation + Phase 9 Event Store + Phase 10 Notifications + Phase 11 Lifecycle Gate + Phase 12 Notification Store)
 
 Current state:
 
@@ -11,6 +11,7 @@ Current state:
 - Phase 9 adds durable event/snapshot persistence (`infra/event_store.py`)
 - Phase 10 adds deterministic event-to-human notification rules (`domain/notification_rules.py`)
 - Phase 11 adds deterministic idle/finalization lifecycle gating (`domain/session_lifecycle.py`)
+- Phase 12 adds durable notification persistence (`infra/notification_store.py`)
 
 Phase 3.5 worker capabilities:
 
@@ -156,6 +157,18 @@ Phase 11 session-lifecycle capabilities (module-level, pre-worker wiring):
   - concurrent finalizers on the same session result in one winner
   - rerun after processed state emits no additional notifications
 
+Phase 12 notification-store capabilities (infrastructure persistence):
+
+- persists user-facing notifications in `schedule_notification`
+- writes deterministic notification IDs from Phase 10 as idempotent primary keys
+- supports both dataclass and dict notification payload inputs
+- stores normalized envelope fields:
+  - `notification_id`, `user_id`, `schedule_date`, `source_session_id`
+  - `notification_type`, `message`, `event_ids`, `created_at`
+- lifecycle wiring supports:
+  - `events -> build_notifications(events) -> store_notifications(notifications)`
+  - one processing run per finalized session persists notifications once
+
 ## Setup
 
 ```bash
@@ -172,6 +185,12 @@ Apply event history migration (Phase 9):
 
 ```bash
 psql "$DATABASE_URL" -f database/migrations/20260213_add_schedule_event_history.sql
+```
+
+Apply notification store migration (Phase 12):
+
+```bash
+psql "$DATABASE_URL" -f database/migrations/20260213_add_schedule_notifications.sql
 ```
 
 ## Required Environment Variables
@@ -327,6 +346,14 @@ Requires `TEST_DATABASE_URL` or `DATABASE_URL`:
 
 ```bash
 uv run python -m unittest tests/test_session_lifecycle.py
+```
+
+### Notification Store Tests (DB Integration)
+
+Requires `TEST_DATABASE_URL` or `DATABASE_URL`:
+
+```bash
+uv run python -m unittest tests/test_notification_store.py
 ```
 
 ## Invariants Enforced

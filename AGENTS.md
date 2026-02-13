@@ -260,6 +260,14 @@ If the date cannot be resolved or is inconsistent:
   - deterministic once-per-session processing helper: finalizable scan -> finalize -> process callbacks -> processed-state mark
   - processed transition is ownership-safe at SQL update level by requiring `processing_state` at update time
   - tests in `tests/test_session_lifecycle.py` cover: not-finalized-while-active, idle-finalizable transition, finalize race safety, and single notification emission across reruns
+- Phase 12 notification persistence (pre-Telegram delivery wiring):
+  - infrastructure module in `infra/notification_store.py`
+  - persists deterministic Phase 10 notifications to `schedule_notification`
+  - idempotency enforced by deterministic `notification_id` primary key + conflict-ignore insert behavior
+  - lifecycle orchestration supports callback flow:
+    - `events -> build_notifications(events) -> store_notifications(notifications)`
+  - DB migration added: `database/migrations/20260213_add_schedule_notifications.sql`
+  - integration tests added: `tests/test_notification_store.py`
 - Worker runtime is still fixture-driven (`main.py`); OCR adapter is validated separately and not yet used for DB write path
 
 ---
