@@ -197,9 +197,8 @@ Phase 13 background runtime capabilities:
     - `user_id`
     - `correlation_id` (session scoped)
 - iteration logs include:
-  - iteration start/end
-  - processed session count
-  - generated and stored notification counts
+  - activity completion (`worker.iteration.finish`) with processed/generated/stored counts
+  - idle heartbeat (`worker.iteration.idle`) at a throttled cadence (`WORKER_IDLE_LOG_EVERY`)
 - semantic event logs include:
   - `session.skipped_idle`
   - `session.finalized`
@@ -251,6 +250,7 @@ Optional:
 - `DB_SCHEMA` (default: `schedule_ingest`)
 - `FIXTURE_PAYLOAD_PATH` (default: `fixtures/sample_schedule.json`)
 - `WORKER_POLL_SECONDS` (default: `5`)
+- `WORKER_IDLE_LOG_EVERY` (default: `12`, log every N idle iterations; first idle iteration is always logged)
 - `ENABLE_CHAOS_PARSER` (default: `false`)
 - `CHAOS_SEED` (default: `0`)
 - `WORKER_ID` (default: `worker-<pid>`)
