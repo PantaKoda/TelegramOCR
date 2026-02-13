@@ -245,6 +245,12 @@ If the date cannot be resolved or is inconsistent:
   - monotonic history invariant validated in tests by replaying persisted events and comparing reconstructed snapshot to stored snapshot
   - DB migration added: `database/migrations/20260213_add_schedule_event_history.sql`
   - integration tests added: `tests/test_event_store.py`
+- Phase 10 notification rules (human-facing interpretation layer):
+  - deterministic notification mapper in `domain/notification_rules.py`
+  - translates semantic events into user-facing sentences using canonical fields only
+  - supports per-day/session summary suppression to avoid notification storms (default threshold: 3 changes)
+  - supports replay dedupe via `already_notified_event_ids` so repeated event fetches do not re-notify
+  - tests in `tests/test_notification_rules.py` cover single-event messaging, summary mode, no-change output, and replay dedupe
 - Worker runtime is still fixture-driven (`main.py`); OCR adapter is validated separately and not yet used for DB write path
 
 ---
