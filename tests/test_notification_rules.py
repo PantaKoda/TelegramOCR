@@ -64,7 +64,7 @@ class NotificationRulesTests(unittest.TestCase):
         self.assertEqual(len(notifications), 1)
         self.assertEqual(notifications[0].notification_type, "summary")
         self.assertEqual(notifications[0].message, "3 shifts updated for tomorrow")
-        self.assertEqual(notifications[0].event_ids, ("e1", "e2", "e3"))
+        self.assertEqual(notifications[0].event_ids, ("e1", "e3", "e2"))
 
     def test_no_events_returns_no_notifications(self) -> None:
         notifications = build_notifications([], today=date(2026, 8, 21))
@@ -81,7 +81,33 @@ class NotificationRulesTests(unittest.TestCase):
         self.assertEqual(len(second), 0)
         self.assertIn("e1", seen)
 
+    def test_default_wording_is_clock_independent_absolute_date(self) -> None:
+        events = [_added_event(event_id="e1", source_session_id="s1", schedule_date="2026-08-22")]
+
+        notifications = build_notifications(events)
+
+        self.assertEqual(len(notifications), 1)
+        self.assertEqual(
+            notifications[0].message,
+            "New shift added on 2026-08-22 10:00–14:00 in Billdal",
+        )
+
+    def test_notification_order_is_stable(self) -> None:
+        # Intentionally shuffled input order across dates and start times.
+        events = [
+            _added_event(event_id="e4", source_session_id="s2", schedule_date="2026-08-23"),
+            _added_event(event_id="e2", source_session_id="s1", schedule_date="2026-08-22"),
+            _added_event(event_id="e3", source_session_id="s1", schedule_date="2026-08-22"),
+            _added_event(event_id="e1", source_session_id="s1", schedule_date="2026-08-22"),
+        ]
+        events[1]["new_value"]["start"] = "12:00"
+        events[2]["new_value"]["start"] = "08:00"
+        events[3]["new_value"]["start"] = "10:00"
+
+        notifications = build_notifications(events, summary_threshold=10)
+
+        self.assertEqual([item.event_ids[0] for item in notifications], ["e3", "e1", "e2", "e4"])
+
 
 if __name__ == "__main__":
     unittest.main()
-

@@ -50,7 +50,7 @@ def build_notifications(
     if summary_threshold <= 0:
         raise ValueError("summary_threshold must be > 0")
 
-    baseline_day = today or date.today()
+    baseline_day = today
     seen = already_notified_event_ids if already_notified_event_ids is not None else set()
 
     normalized_events = sorted((_coerce_event(value) for value in events), key=_event_sort_key)
@@ -145,17 +145,21 @@ def _coerce_event(value: ScheduleEvent | dict[str, Any]) -> ScheduleEvent:
 
 
 def _event_sort_key(event: ScheduleEvent) -> tuple:
+    shift = event.new_value if event.new_value is not None else (event.old_value if event.old_value is not None else {})
+    start = str(shift.get("start", "99:99"))
     return (
         event.user_id,
         event.schedule_date.isoformat(),
+        start,
+        event.location_fingerprint,
+        event.event_type,
         event.source_session_id,
         event.detected_at.isoformat() if event.detected_at is not None else "",
         event.event_id,
-        event.event_type,
     )
 
 
-def _event_message(event: ScheduleEvent, baseline_day: date) -> str:
+def _event_message(event: ScheduleEvent, baseline_day: date | None) -> str:
     day_upper = _day_label_capitalized(event.schedule_date, baseline_day)
     day_lower = _day_label(event.schedule_date, baseline_day)
     old_shift = event.old_value or {}
@@ -206,7 +210,9 @@ def _shift_type_label(value: str) -> str:
     return mapping.get(value, value.title())
 
 
-def _day_label(schedule_date: date, baseline_day: date) -> str:
+def _day_label(schedule_date: date, baseline_day: date | None) -> str:
+    if baseline_day is None:
+        return f"on {schedule_date.isoformat()}"
     if schedule_date == baseline_day:
         return "today"
     if schedule_date == baseline_day.fromordinal(baseline_day.toordinal() + 1):
@@ -214,7 +220,7 @@ def _day_label(schedule_date: date, baseline_day: date) -> str:
     return f"on {schedule_date.isoformat()}"
 
 
-def _day_label_capitalized(schedule_date: date, baseline_day: date) -> str:
+def _day_label_capitalized(schedule_date: date, baseline_day: date | None) -> str:
     value = _day_label(schedule_date, baseline_day)
     return value[:1].upper() + value[1:]
 
@@ -246,4 +252,3 @@ def _value_key(value: dict[str, Any] | None) -> str:
     keys = sorted(value.keys())
     parts = [f"{key}:{value[key]}" for key in keys]
     return "|".join(parts)
-
