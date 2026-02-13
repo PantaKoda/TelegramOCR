@@ -1,6 +1,11 @@
-# OCR Worker (Phase 3.5 Chaos Normalization)
+# OCR Worker (Phase 3.5 Worker + Phase 5 OCR Adapter)
 
-Phase 3.5 validates noise-tolerant versioning before OCR:
+Current state:
+
+- Phase 3.5 worker validates noise-tolerant versioning before OCR (`main.py`)
+- Phase 5 adds real PaddleOCR box extraction adapter + golden sample tests (`ocr/paddle_adapter.py`)
+
+Phase 3.5 worker capabilities:
 
 - PostgreSQL connectivity
 - at-most-one session claim per run using `FOR UPDATE SKIP LOCKED`
@@ -19,7 +24,17 @@ Phase 3.5 validates noise-tolerant versioning before OCR:
 - session transition: `processing -> done | failed`, clearing lease fields
 - deterministic pre-OCR layout parser module for OCR-like boxes (`parser/layout_parser.py`)
 
-Real OCR integration and image parsing are not wired into the worker yet.
+Phase 5 adapter capabilities (not yet wired into `main.py` DB write path):
+
+- PaddleOCR models:
+  - `PP-OCRv5_mobile_det`
+  - `PP-OCRv5_mobile_rec`
+- Paddle options:
+  - `use_doc_orientation_classify=False`
+  - `use_doc_unwarping=False`
+  - `use_textline_orientation=False`
+- conversion only: Paddle polygons/text/scores -> box geometry (`x`, `y`, `w`, `h`) + confidence
+- no adapter-side filtering/grouping/normalization; parser remains source of layout grouping truth
 
 ## Setup
 
@@ -131,6 +146,15 @@ Coverage:
 - chaos noise does not create phantom versions (`tests/test_integration_fixture_versioning.py`)
 - synthetic layout reconstruction (single card, stacked cards, wrapped address, header ignore, jitter, landscape columns) (`tests/test_layout_parser.py`)
 - unit checks for fixture parsing + insert SQL parameterization (`tests/test_main_worker.py`)
+
+### OCR Adapter Golden Tests (No DB)
+
+Uses real screenshot fixtures and verifies:
+`image -> PaddleOCR boxes -> parse_layout -> expected entries`.
+
+```bash
+PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK=true uv run python -m unittest tests/test_paddle_adapter.py tests/test_ocr_golden_samples.py
+```
 
 ## Invariants Enforced
 

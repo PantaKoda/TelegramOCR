@@ -199,7 +199,13 @@ If the date cannot be resolved or is inconsistent:
   - time detection via regex (`HH:MM`/`HH.MM` ranges), normalized to `HH:MM`
   - output entry fields: `start`, `end`, `title`, `location`, `address`
   - top chrome/header cards without time lines are ignored
-- OCR extraction and image download are not implemented yet
+- Phase 5 OCR adapter (pre-worker wiring):
+  - PaddleOCR adapter implemented in `ocr/paddle_adapter.py`
+  - configured models: `PP-OCRv5_mobile_det` + `PP-OCRv5_mobile_rec`
+  - adapter contract is thin conversion only: Paddle polygon/text/score -> `Box` geometry (`x`, `y`, `w`, `h`) + confidence
+  - no filtering, grouping, normalization, or semantic cleanup in adapter
+  - real-screenshot golden tests added in `tests/test_ocr_golden_samples.py` with fixtures under `tests/ocr_samples/`
+- Worker runtime is still fixture-driven (`main.py`); OCR adapter is validated separately and not yet used for DB write path
 
 ---
 
