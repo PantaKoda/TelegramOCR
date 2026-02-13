@@ -411,6 +411,9 @@ def run_forever() -> None:
             "poll_seconds": config.poll_seconds,
             "idle_timeout_seconds": lifecycle_config.idle_timeout_seconds,
             "idle_log_every": config.idle_log_every,
+            "open_state": lifecycle_config.open_state,
+            "processing_state": lifecycle_config.processing_state,
+            "processed_state": lifecycle_config.processed_state,
         },
     )
 

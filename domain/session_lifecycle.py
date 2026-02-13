@@ -14,7 +14,7 @@ from psycopg.rows import dict_row
 @dataclass(frozen=True)
 class SessionLifecycleConfig:
     idle_timeout_seconds: int = 25
-    open_state: str = "pending"
+    open_state: str = "closed"
     processing_state: str = "processing"
     processed_state: str = "done"
 
@@ -26,22 +26,25 @@ def load_lifecycle_config_from_env(
 ) -> SessionLifecycleConfig:
     base = default or SessionLifecycleConfig()
     source = env or os.environ
+    idle_timeout_seconds = base.idle_timeout_seconds
     raw_timeout = source.get("SESSION_IDLE_TIMEOUT_SECONDS")
-    if raw_timeout is None:
-        return base
+    if raw_timeout is not None:
+        try:
+            idle_timeout_seconds = int(raw_timeout)
+        except ValueError as error:
+            raise ValueError("SESSION_IDLE_TIMEOUT_SECONDS must be an integer.") from error
+        if idle_timeout_seconds < 0:
+            raise ValueError("SESSION_IDLE_TIMEOUT_SECONDS must be >= 0.")
 
-    try:
-        idle_timeout_seconds = int(raw_timeout)
-    except ValueError as error:
-        raise ValueError("SESSION_IDLE_TIMEOUT_SECONDS must be an integer.") from error
-    if idle_timeout_seconds < 0:
-        raise ValueError("SESSION_IDLE_TIMEOUT_SECONDS must be >= 0.")
+    open_state = _read_state_env(source, "OPEN_STATE", "PENDING_STATE") or base.open_state
+    processing_state = _read_state_env(source, "PROCESSING_STATE") or base.processing_state
+    processed_state = _read_state_env(source, "PROCESSED_STATE", "DONE_STATE") or base.processed_state
 
     return SessionLifecycleConfig(
         idle_timeout_seconds=idle_timeout_seconds,
-        open_state=base.open_state,
-        processing_state=base.processing_state,
-        processed_state=base.processed_state,
+        open_state=open_state,
+        processing_state=processing_state,
+        processed_state=processed_state,
     )
 
 
@@ -201,3 +204,15 @@ def _validate_now(value: datetime) -> None:
 
 def utc_now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _read_state_env(source: Mapping[str, str], *names: str) -> str | None:
+    for name in names:
+        raw = source.get(name)
+        if raw is None:
+            continue
+        value = raw.strip()
+        if not value:
+            raise ValueError(f"{name} must be a non-empty state value.")
+        return value
+    return None
