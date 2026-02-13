@@ -339,6 +339,19 @@ Notes:
 - no ports are exposed
 - logs are emitted to stdout only
 
+## Compose Service Labels (Promtail/Loki)
+
+The worker service definition in `/Users/themis/Desktop/Dev/ocr/docker-compose.yml` includes container labels:
+
+- `service=telegram-ocr-worker`
+- `logging=promtail`
+
+This allows Promtail to attach `service=telegram-ocr-worker` and enables Loki queries like:
+
+```logql
+{service="telegram-ocr-worker"}
+```
+
 ## How To Test
 
 1. Ensure at least one session is claimable:
