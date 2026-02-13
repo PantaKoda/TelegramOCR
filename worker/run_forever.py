@@ -539,6 +539,27 @@ def run_iteration(
             },
         )
 
+    failed_session_count = 0
+
+    def on_session_failed(session_id: str, error: Exception, marked_failed: bool) -> None:
+        nonlocal failed_session_count
+        failed_session_count += 1
+        context = _ensure_session_context(conn, config.db_schema, session_id, session_context)
+        stage = error.stage if isinstance(error, WorkerStageError) else "lifecycle"
+        logger.error(
+            "Session processing failed",
+            extra={
+                "event": "session.failed",
+                "session_id": session_id,
+                "user_id": context["user_id"],
+                "correlation_id": context["correlation_id"],
+                "error.type": type(error).__name__,
+                "error.message": str(error),
+                "error.stage": stage,
+                "marked_failed": marked_failed,
+            },
+        )
+
     processed = run_lifecycle_once(
         conn,
         config.db_schema,
@@ -550,12 +571,14 @@ def run_iteration(
         store_notifications=store_notifications_callback,
         on_session_finalized=on_session_finalized,
         on_session_processed=on_session_processed,
+        on_session_failed=on_session_failed,
         config=lifecycle_config,
     )
 
     notification_count = sum(len(item[1]) for item in processed)
     return {
         "processed_sessions": len(processed),
+        "failed_sessions": failed_session_count,
         "generated_notifications": notification_count,
         "stored_notifications": stored_notification_count,
     }
@@ -579,6 +602,7 @@ def run_forever() -> None:
             "open_state": lifecycle_config.open_state,
             "processing_state": lifecycle_config.processing_state,
             "processed_state": lifecycle_config.processed_state,
+            "failed_state": lifecycle_config.failed_state,
         },
     )
 
@@ -591,6 +615,7 @@ def run_forever() -> None:
                     result = run_iteration(conn, config, lifecycle_config, logger=logger)
             has_activity = (
                 result["processed_sessions"] > 0
+                or result["failed_sessions"] > 0
                 or result["generated_notifications"] > 0
                 or result["stored_notifications"] > 0
             )
@@ -601,6 +626,7 @@ def run_forever() -> None:
                     extra={
                         "event": "worker.iteration.finish",
                         "processed_sessions": result["processed_sessions"],
+                        "failed_sessions": result["failed_sessions"],
                         "generated_notifications": result["generated_notifications"],
                         "stored_notifications": result["stored_notifications"],
                     },

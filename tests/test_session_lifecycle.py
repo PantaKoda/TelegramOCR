@@ -28,6 +28,7 @@ class SessionLifecycleConfigTests(unittest.TestCase):
         config = load_lifecycle_config_from_env()
         self.assertEqual(config.idle_timeout_seconds, 25)
         self.assertEqual(config.open_state, "closed")
+        self.assertEqual(config.failed_state, "failed")
 
     def test_rejects_invalid_idle_timeout_value(self) -> None:
         with self.assertRaisesRegex(ValueError, "must be an integer"):
@@ -43,11 +44,13 @@ class SessionLifecycleConfigTests(unittest.TestCase):
                 "OPEN_STATE": "closed",
                 "PROCESSING_STATE": "processing",
                 "PROCESSED_STATE": "done",
+                "FAILED_STATE": "failed",
             }
         )
         self.assertEqual(config.open_state, "closed")
         self.assertEqual(config.processing_state, "processing")
         self.assertEqual(config.processed_state, "done")
+        self.assertEqual(config.failed_state, "failed")
 
     def test_supports_pending_state_alias(self) -> None:
         config = load_lifecycle_config_from_env(env={"PENDING_STATE": "closed"})
@@ -242,6 +245,59 @@ class SessionLifecycleIntegrationTests(unittest.TestCase):
         self.assertEqual(self._session_state(session_id), "done")
         self.assertEqual(process_calls.count("notify"), 1)
         self.assertEqual(process_calls.count("store"), 1)
+
+    def test_pipeline_failure_marks_session_failed_once(self) -> None:
+        now = datetime.now(timezone.utc)
+        session_id = self._seed_session(state="closed")
+        self._add_image(session_id=session_id, sequence=1, created_at=now - timedelta(seconds=60))
+
+        failure_calls: list[str] = []
+
+        def load_session_images(_conn: Any, _schema: str, loaded_session_id: str) -> list[str]:
+            return [f"{loaded_session_id}-1.png"]
+
+        def run_full_pipeline(_images: list[str]) -> dict[str, Any]:
+            raise RuntimeError("forced failure")
+
+        def persist_events_and_snapshot(_conn: Any, _schema: str, _session_id: str, _pipeline: Any) -> list[dict[str, str]]:
+            self.fail("persist_events_and_snapshot should not run when pipeline fails")
+
+        def build_notifications(_events: list[dict[str, str]]) -> list[dict[str, str]]:
+            self.fail("build_notifications should not run when pipeline fails")
+
+        def on_session_failed(failed_session_id: str, error: Exception, marked_failed: bool) -> None:
+            failure_calls.append(f"{failed_session_id}:{type(error).__name__}:{marked_failed}")
+
+        with psycopg.connect(DB_URL) as conn:
+            with conn.transaction():
+                first = run_lifecycle_once(
+                    conn,
+                    self.schema,
+                    now,
+                    load_session_images=load_session_images,
+                    run_full_pipeline=run_full_pipeline,
+                    persist_events_and_snapshot=persist_events_and_snapshot,
+                    build_notifications=build_notifications,
+                    on_session_failed=on_session_failed,
+                    config=self.config,
+                )
+            with conn.transaction():
+                second = run_lifecycle_once(
+                    conn,
+                    self.schema,
+                    now + timedelta(seconds=10),
+                    load_session_images=load_session_images,
+                    run_full_pipeline=run_full_pipeline,
+                    persist_events_and_snapshot=persist_events_and_snapshot,
+                    build_notifications=build_notifications,
+                    on_session_failed=on_session_failed,
+                    config=self.config,
+                )
+
+        self.assertEqual(first, [])
+        self.assertEqual(second, [])
+        self.assertEqual(self._session_state(session_id), "failed")
+        self.assertEqual(len(failure_calls), 1)
 
 
 if __name__ == "__main__":
