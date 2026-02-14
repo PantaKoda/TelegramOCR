@@ -17,6 +17,7 @@ from worker.run_forever import (
     JsonFormatter,
     WorkerRuntimeConfig,
     _extract_image_names,
+    _resolve_session_schedule_dates,
     _extract_schedule_date_from_boxes,
     _should_log_idle_iteration,
     _with_source_image_labels,
@@ -247,6 +248,22 @@ class RunForeverFixtureParsingTests(unittest.TestCase):
         ]
         parsed = _extract_schedule_date_from_boxes(boxes, default_year=2026)
         self.assertEqual(parsed, date(2026, 2, 14))
+
+    def test_resolve_session_schedule_dates_inherits_missing_values(self) -> None:
+        anchor, resolved, inherited = _resolve_session_schedule_dates(
+            [date(2026, 9, 4), None, None]
+        )
+        self.assertEqual(anchor, date(2026, 9, 4))
+        self.assertEqual(resolved, [date(2026, 9, 4), date(2026, 9, 4), date(2026, 9, 4)])
+        self.assertEqual(inherited, 2)
+
+    def test_resolve_session_schedule_dates_rejects_conflicts(self) -> None:
+        with self.assertRaisesRegex(RuntimeError, "Inconsistent schedule dates"):
+            _resolve_session_schedule_dates([date(2026, 9, 4), date(2026, 9, 5)])
+
+    def test_resolve_session_schedule_dates_requires_at_least_one_explicit_date(self) -> None:
+        with self.assertRaisesRegex(RuntimeError, "No schedule date detected"):
+            _resolve_session_schedule_dates([None, None])
 
 
 @unittest.skipUnless(DB_URL, "Integration test requires TEST_DATABASE_URL or DATABASE_URL")
