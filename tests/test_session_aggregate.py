@@ -251,6 +251,96 @@ class SessionAggregateTests(unittest.TestCase):
         self.assertEqual(result.shifts[0].shift.start, "10:00")
         self.assertEqual(result.shifts[0].shift.end, "14:00")
 
+    def test_exact_time_duplicate_with_noisy_location_is_collapsed(self) -> None:
+        noisy = _shift(
+            start="12:30",
+            end="13:30",
+            customer_name="Gustaf Agrenius",
+            street="Caro",
+            street_number="2",
+            city="Schedule Helphub Account",
+            shift_type="WORK",
+        )
+        clean = _shift(
+            start="12:30",
+            end="13:30",
+            customer_name="Gustaf Agrenius",
+            street="Saro Sanna Dalstigen",
+            street_number="9",
+            city="",
+            shift_type="WORK",
+        )
+
+        result = aggregate_session_shifts([[noisy], [clean]], schedule_date="2026-08-22")
+
+        self.assertEqual(len(result.shifts), 1)
+        self.assertEqual(result.shifts[0].source_count, 2)
+        self.assertEqual(result.shifts[0].shift.street, "Saro Sanna Dalstigen")
+        self.assertEqual(result.shifts[0].shift.street_number, "9")
+
+    def test_exact_time_same_customer_but_different_shift_type_prefers_higher_priority(self) -> None:
+        work = _shift(
+            start="16:00",
+            end="17:00",
+            customer_name="Helena Johansson",
+            street="Kullaviks Angsvag",
+            street_number="16",
+            city="Kullavik",
+            shift_type="WORK",
+        )
+        training = _shift(
+            start="16:00",
+            end="17:00",
+            customer_name="Helena Johansson",
+            street="Kullaviks Angsvag",
+            street_number="16",
+            city="Kullavik",
+            shift_type="TRAINING",
+        )
+
+        result = aggregate_session_shifts([[work], [training]], schedule_date="2026-08-22")
+
+        self.assertEqual(len(result.shifts), 1)
+        self.assertEqual(result.shifts[0].source_count, 2)
+        self.assertEqual(result.shifts[0].shift.shift_type, "WORK")
+
+    def test_activity_merge_keeps_raw_label_based_identity_fingerprint(self) -> None:
+        shared_location = location_fingerprint(street="", street_number="", postal_area="", city="")
+        activity_a = CanonicalShift(
+            start="12:00",
+            end="12:30",
+            customer_name="",
+            customer_fingerprint=customer_fingerprint("Restid"),
+            street="",
+            street_number="",
+            postal_code="",
+            postal_area="",
+            city="",
+            location_fingerprint=shared_location,
+            shift_type="TRAVEL",
+            raw_type_label="Restid",
+        )
+        activity_b = CanonicalShift(
+            start="12:01",
+            end="12:29",
+            customer_name="",
+            customer_fingerprint=customer_fingerprint("Restid"),
+            street="",
+            street_number="",
+            postal_code="",
+            postal_area="",
+            city="",
+            location_fingerprint=shared_location,
+            shift_type="TRAVEL",
+            raw_type_label="Restid",
+        )
+
+        result = aggregate_session_shifts([[activity_a], [activity_b]], schedule_date="2026-08-22")
+
+        self.assertEqual(len(result.shifts), 1)
+        self.assertEqual(result.shifts[0].source_count, 2)
+        self.assertEqual(result.shifts[0].shift.customer_fingerprint, customer_fingerprint("Restid"))
+
 
 if __name__ == "__main__":
     unittest.main()
