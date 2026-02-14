@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from difflib import SequenceMatcher
 import re
 import unicodedata
 from dataclasses import dataclass
@@ -36,6 +37,8 @@ TYPE_LABEL_HINTS = (
     "avbokade uppdrag",
     "avokade uppdrag",
 )
+TYPE_LABEL_FUZZY_MIN_LEN = 5
+TYPE_LABEL_FUZZY_THRESHOLD = 0.82
 
 
 @dataclass(frozen=True)
@@ -612,6 +615,8 @@ def _looks_like_type_label(value: str) -> bool:
     for hint in TYPE_LABEL_HINTS:
         if re.search(rf"\b{re.escape(hint)}\b", normalized):
             return True
+    if _contains_fuzzy_type_hint(normalized):
+        return True
     return False
 
 
@@ -637,6 +642,30 @@ def _is_numeric_noise_only(value: str) -> bool:
 def _strip_leading_numeric_noise(value: str) -> str:
     stripped = re.sub(r"^(?:\s*(?:\d+|\d+\s*h(?:\s*\d+\s*m)?|\d+\s*m(?:in)?)\b)+\s*", "", value, flags=re.IGNORECASE)
     return _clean_text(stripped)
+
+
+def _contains_fuzzy_type_hint(normalized: str) -> bool:
+    tokens = [token for token in normalized.split() if token]
+    if not tokens:
+        return False
+
+    candidates: set[str] = set()
+    for size in (1, 2, 3):
+        if len(tokens) < size:
+            continue
+        for index in range(len(tokens) - size + 1):
+            phrase = " ".join(tokens[index : index + size])
+            if len(phrase.replace(" ", "")) >= TYPE_LABEL_FUZZY_MIN_LEN:
+                candidates.add(phrase)
+
+    for candidate in candidates:
+        for hint in TYPE_LABEL_HINTS:
+            if abs(len(candidate) - len(hint)) > 6:
+                continue
+            score = SequenceMatcher(None, candidate, hint).ratio()
+            if score >= TYPE_LABEL_FUZZY_THRESHOLD:
+                return True
+    return False
 
 
 def _strip_noise_prefix(value: str) -> str:

@@ -360,6 +360,25 @@ class LayoutParserTests(unittest.TestCase):
         ]
         self.assert_layout(boxes, expected)
 
+    def test_stacked_times_keep_fuzzy_type_line_with_small_ocr_typo(self) -> None:
+        boxes = [
+            Box(text="08:00", x=38, y=210, w=60, h=22),
+            Box(text="12:00", x=40, y=238, w=60, h=22),
+            Box(text="Frida Haagg Snellman", x=118, y=238, w=260, h=24),
+            Box(text="Stadservic", x=320, y=266, w=130, h=24),
+            Box(text="Asa Henriks Vag 16", x=120, y=296, w=220, h=24),
+        ]
+        expected = [
+            {
+                "start": "08:00",
+                "end": "12:00",
+                "title": "Frida Haagg Snellman Stadservic",
+                "location": "",
+                "address": "Asa Henriks Vag 16",
+            }
+        ]
+        self.assert_layout(boxes, expected)
+
 
 if __name__ == "__main__":
     unittest.main()
