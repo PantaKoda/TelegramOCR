@@ -200,8 +200,10 @@ If the date cannot be resolved or is inconsistent:
   - input: flat list of OCR-like boxes (`text`, `x`, `y`, `w`, `h`)
   - deterministic pipeline: sort -> line clustering -> card grouping -> field extraction
   - time detection via regex (`HH:MM`/`HH.MM` ranges), normalized to `HH:MM`
-  - supports stacked two-line time ranges (`start` on one line, `end` on next) by consolidating adjacent single-time markers into one shift interval
+  - supports stacked two-line time ranges (`start` on one line, `end` on next) by consolidating single-time markers in the same left time column, including cases where status/noise lines exist between them
   - strips UI-noise tokens (e.g., collaborator/status/duration lines such as `Collaborators`, `On time`, `4h`) before title/address/location assignment
+  - prunes far-right trailing metadata chips inside cards (e.g., collaborator counters/icons) using geometry so address/location assignment stays stable under OCR text noise
+  - drops single-time cards without address/location as UI chrome/footer artifacts (e.g., status-bar clock or end-of-day thank-you rows)
   - treats single trailing metadata line as address when it matches address-like features (digits, comma, common street tokens), reducing location/address inversion
   - output entry fields: `start`, `end`, `title`, `location`, `address`
   - top chrome/header cards without time lines are ignored
@@ -216,6 +218,10 @@ If the date cannot be resolved or is inconsistent:
   - deterministic semantic normalization module in `parser/semantic_normalizer.py`
   - address decomposition into `street`, `street_number`, `postal_code`, `postal_area`, `city`
   - customer/title cleanup with whitespace collapse, casing normalization, and company-noise token removal
+  - title-row parsing supports `client • job_type duration` pattern:
+    - customer name is extracted from the segment before `•`
+    - trailing durations (e.g., `4h`, `2h 30m`) are stripped from customer/job hints
+    - trailing job-type suffixes without `•` (e.g., `Name Stadservice 5h`) are also split for cleaner customer identity
   - deterministic shift classification tags: `SCHOOL`, `OFFICE`, `HOME_VISIT`, `UNKNOWN`
   - canonical output now includes deterministic identity keys: `location_fingerprint`, `customer_fingerprint`
   - normalization tests in `tests/test_semantic_normalizer.py` (accent loss, missing postal code, multiline address join, OCR noise, canonical-location variants)

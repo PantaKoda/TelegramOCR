@@ -184,7 +184,7 @@ def _cluster_lines(boxes: list[Box]) -> list[_Line]:
             _Line(
                 text=text,
                 x=min(box.x for box in line_boxes_sorted),
-                y=min(box.y for box in line_boxes_sorted),
+                y=median(box.y for box in line_boxes_sorted),
                 h=median(max(box.h, 1.0) for box in line_boxes_sorted),
             )
         )
@@ -282,7 +282,9 @@ def _parse_card_entries(lines: list[_Line]) -> list[tuple[Entry, float, float]]:
         if not title:
             continue
 
-        trailing_lines = [_strip_noise_prefix(lines[index].text) for index in trailing_indices]
+        trailing_line_objects = [lines[index] for index in trailing_indices]
+        trailing_line_objects = _prune_far_right_metadata_lines(trailing_line_objects)
+        trailing_lines = [_strip_noise_prefix(line.text) for line in trailing_line_objects]
         trailing_lines = [line for line in trailing_lines if line and not _is_noise_line(line)]
         if not trailing_lines:
             address = ""
@@ -305,6 +307,8 @@ def _parse_card_entries(lines: list[_Line]) -> list[tuple[Entry, float, float]]:
             location=location,
             address=address,
         )
+        if _should_drop_single_time_entry(entry):
+            continue
         anchor = lines[marker["anchor_index"]]
         results.append((entry, anchor.y, anchor.x))
 
@@ -313,6 +317,14 @@ def _parse_card_entries(lines: list[_Line]) -> list[tuple[Entry, float, float]]:
 
 def _consolidate_time_markers(markers: list[tuple[int, _ParsedTime]], lines: list[_Line]) -> list[dict[str, Any]]:
     combined: list[dict[str, Any]] = []
+    if not markers:
+        return combined
+
+    median_height = median(max(line.h, 1.0) for line in lines) if lines else 20.0
+    max_time_column_delta = max(16.0, median_height * 1.1)
+    max_vertical_gap = max(52.0, median_height * 4.2)
+    max_intermediate_lines = 4
+
     index = 0
     while index < len(markers):
         current_index, current_time = markers[index]
@@ -321,22 +333,33 @@ def _consolidate_time_markers(markers: list[tuple[int, _ParsedTime]], lines: lis
         if not current_time.is_range and index + 1 < len(markers):
             next_index, next_time = markers[index + 1]
             next_leading = _leading_single_time(lines[next_index].text)
-            if (
-                not next_time.is_range
-                and next_index == current_index + 1
-                and current_leading is not None
-                and next_leading is not None
-                and current_leading[0] == current_time.start
-                and next_leading[0] == next_time.start
+            if _can_merge_stacked_single_times(
+                current_index=current_index,
+                next_index=next_index,
+                current_time=current_time,
+                next_time=next_time,
+                current_leading=current_leading,
+                next_leading=next_leading,
+                lines=lines,
+                max_time_column_delta=max_time_column_delta,
+                max_vertical_gap=max_vertical_gap,
+                max_intermediate_lines=max_intermediate_lines,
             ):
                 next_prefill = next_leading[1]
+                between_prefill = _prefill_from_between_lines(
+                    lines=lines,
+                    start_index=current_index + 1,
+                    end_index=next_index,
+                    time_column_x=lines[current_index].x,
+                    max_time_column_delta=max_time_column_delta,
+                )
                 combined.append(
                     {
                         "start_index": current_index,
                         "end_index": next_index,
                         "anchor_index": current_index,
                         "time": _ParsedTime(start=current_time.start, end=next_time.start, is_range=True),
-                        "prefill_title": next_prefill or current_prefill,
+                        "prefill_title": _choose_prefill_title(current_prefill, next_prefill, between_prefill),
                     }
                 )
                 index += 2
@@ -352,6 +375,124 @@ def _consolidate_time_markers(markers: list[tuple[int, _ParsedTime]], lines: lis
         )
         index += 1
     return combined
+
+
+def _can_merge_stacked_single_times(
+    *,
+    current_index: int,
+    next_index: int,
+    current_time: _ParsedTime,
+    next_time: _ParsedTime,
+    current_leading: tuple[str, str] | None,
+    next_leading: tuple[str, str] | None,
+    lines: list[_Line],
+    max_time_column_delta: float,
+    max_vertical_gap: float,
+    max_intermediate_lines: int,
+) -> bool:
+    if next_time.is_range:
+        return False
+    if current_leading is None or next_leading is None:
+        return False
+    if current_leading[0] != current_time.start or next_leading[0] != next_time.start:
+        return False
+
+    if next_index <= current_index:
+        return False
+    if (next_index - current_index - 1) > max_intermediate_lines:
+        return False
+
+    current_line = lines[current_index]
+    next_line = lines[next_index]
+    if abs(next_line.x - current_line.x) > max_time_column_delta:
+        return False
+
+    vertical_gap = next_line.y - current_line.y
+    if vertical_gap <= 0 or vertical_gap > max_vertical_gap:
+        return False
+
+    return _between_lines_are_nonblocking(
+        lines=lines,
+        start_index=current_index + 1,
+        end_index=next_index,
+        time_column_x=current_line.x,
+        max_time_column_delta=max_time_column_delta,
+    )
+
+
+def _between_lines_are_nonblocking(
+    *,
+    lines: list[_Line],
+    start_index: int,
+    end_index: int,
+    time_column_x: float,
+    max_time_column_delta: float,
+) -> bool:
+    # Between start/end times we allow status/noise lines and right-side content,
+    # but we block if another left-column semantic line appears.
+    blocking_x_threshold = max_time_column_delta * 2.5
+    for index in range(start_index, end_index):
+        line = lines[index]
+        text = _clean_text(line.text)
+        if not text:
+            continue
+        if _is_noise_line(text):
+            continue
+        if abs(line.x - time_column_x) > blocking_x_threshold:
+            continue
+        return False
+    return True
+
+
+def _prefill_from_between_lines(
+    *,
+    lines: list[_Line],
+    start_index: int,
+    end_index: int,
+    time_column_x: float,
+    max_time_column_delta: float,
+) -> str:
+    blocking_x_threshold = max_time_column_delta * 2.5
+    candidates: list[str] = []
+    for index in range(start_index, end_index):
+        line = lines[index]
+        if abs(line.x - time_column_x) <= blocking_x_threshold:
+            continue
+        cleaned = _strip_noise_prefix(line.text)
+        if not cleaned or _is_noise_line(cleaned):
+            continue
+        candidates.append(cleaned)
+    if not candidates:
+        return ""
+    return _clean_text(" ".join(candidates))
+
+
+def _prune_far_right_metadata_lines(lines: list[_Line]) -> list[_Line]:
+    if len(lines) < 2:
+        return lines
+    base_x = min(line.x for line in lines)
+    threshold = max(140.0, median(max(line.h, 1.0) for line in lines) * 7.0)
+    kept: list[_Line] = []
+    for line in lines:
+        if (line.x - base_x) > threshold and not _looks_like_address(line.text):
+            continue
+        kept.append(line)
+    return kept if kept else lines
+
+
+def _choose_prefill_title(*candidates: str) -> str:
+    for candidate in candidates:
+        cleaned = _strip_noise_prefix(candidate)
+        if not cleaned:
+            continue
+        if _is_noise_line(cleaned):
+            continue
+        return cleaned
+    for candidate in candidates:
+        cleaned = _strip_noise_prefix(candidate)
+        if cleaned:
+            return cleaned
+    return ""
 
 
 def _leading_single_time(value: str) -> tuple[str, str] | None:
@@ -375,7 +516,11 @@ def _is_noise_line(value: str) -> bool:
     normalized = _normalize_for_match(_strip_noise_prefix(value))
     if not normalized:
         return True
+    if len(normalized) <= 1:
+        return True
     if "collaborator" in normalized:
+        return True
+    if re.search(r"\+\s*\d+\b", normalized):
         return True
     if normalized in {"on time", "ontime", "thank you for today", "thank you for today!"}:
         return True
@@ -384,6 +529,15 @@ def _is_noise_line(value: str) -> bool:
     if re.fullmatch(r"\+?\d+", normalized):
         return True
     return False
+
+
+def _should_drop_single_time_entry(entry: Entry) -> bool:
+    # Single-point cards are typically UI chrome/footer artifacts, not shifts.
+    if entry.start != entry.end:
+        return False
+    if _clean_text(entry.location) or _clean_text(entry.address):
+        return False
+    return True
 
 
 def _looks_like_address(value: str) -> bool:
