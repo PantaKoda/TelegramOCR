@@ -516,14 +516,19 @@ def _consume_leading_type_label(lines: list[str]) -> tuple[str, int]:
     if not lines:
         return "", 0
 
-    first = _clean_text(lines[0])
-    if first and _looks_like_type_label(first):
-        return first, 1
-
-    if len(lines) >= 2:
-        combined = _clean_text(f"{lines[0]} {lines[1]}")
-        if combined and _looks_like_type_label(combined):
-            return combined, 2
+    search_limit = min(3, len(lines))
+    for index in range(search_limit):
+        candidate = _strip_leading_numeric_noise(_clean_text(lines[index]))
+        if candidate and _looks_like_type_label(candidate):
+            return candidate, index + 1
+        if index + 1 < len(lines):
+            first = _clean_text(lines[index])
+            second = _clean_text(lines[index + 1])
+            combined = _strip_leading_numeric_noise(_clean_text(f"{first} {second}"))
+            if combined and _looks_like_type_label(combined):
+                if _is_numeric_noise_only(first):
+                    return _strip_leading_numeric_noise(second), index + 2
+                return combined, index + 2
 
     return "", 0
 
@@ -601,12 +606,37 @@ def _looks_like_type_label(value: str) -> bool:
     normalized = _normalize_for_match(value)
     if not normalized:
         return False
-    if any(char.isdigit() for char in normalized):
+    normalized = _strip_numeric_noise_tokens(normalized)
+    if not normalized:
         return False
     for hint in TYPE_LABEL_HINTS:
         if re.search(rf"\b{re.escape(hint)}\b", normalized):
             return True
     return False
+
+
+def _strip_numeric_noise_tokens(value: str) -> str:
+    stripped = re.sub(r"\b\d+\s*h(?:\s*\d+\s*m)?\b", " ", value)
+    stripped = re.sub(r"\b\d+\s*m(?:in)?\b", " ", stripped)
+    stripped = re.sub(r"\b\d+\b", " ", stripped)
+    return _clean_text(stripped)
+
+
+def _is_numeric_noise_only(value: str) -> bool:
+    normalized = _normalize_for_match(value)
+    if not normalized:
+        return False
+    return bool(
+        re.fullmatch(
+            r"(?:\d+|\d+\s*h(?:\s*\d+\s*m)?|\d+\s*m(?:in)?)(?:\s+(?:\d+|\d+\s*h(?:\s*\d+\s*m)?|\d+\s*m(?:in)?))*",
+            normalized,
+        )
+    )
+
+
+def _strip_leading_numeric_noise(value: str) -> str:
+    stripped = re.sub(r"^(?:\s*(?:\d+|\d+\s*h(?:\s*\d+\s*m)?|\d+\s*m(?:in)?)\b)+\s*", "", value, flags=re.IGNORECASE)
+    return _clean_text(stripped)
 
 
 def _strip_noise_prefix(value: str) -> str:

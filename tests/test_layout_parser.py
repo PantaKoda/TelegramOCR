@@ -321,6 +321,45 @@ class LayoutParserTests(unittest.TestCase):
         ]
         self.assert_layout(boxes, expected)
 
+    def test_stacked_times_keep_type_line_when_numeric_noise_precedes_it(self) -> None:
+        boxes = [
+            Box(text="08:00", x=38, y=210, w=60, h=22),
+            Box(text="12:00", x=40, y=238, w=60, h=22),
+            Box(text="Mattias Rondolph", x=118, y=238, w=240, h=24),
+            Box(text="1", x=290, y=266, w=20, h=22),
+            Box(text="Stadservice", x=320, y=266, w=130, h=24),
+            Box(text="Asa Henriks Vag 2", x=120, y=296, w=220, h=24),
+        ]
+        expected = [
+            {
+                "start": "08:00",
+                "end": "12:00",
+                "title": "Mattias Rondolph Stadservice",
+                "location": "",
+                "address": "Asa Henriks Vag 2",
+            }
+        ]
+        self.assert_layout(boxes, expected)
+
+    def test_stacked_times_keep_type_line_when_duration_suffix_present(self) -> None:
+        boxes = [
+            Box(text="08:00", x=38, y=210, w=60, h=22),
+            Box(text="12:00", x=40, y=238, w=60, h=22),
+            Box(text="Mattias Rondolph", x=118, y=238, w=240, h=24),
+            Box(text="Stadservice 4h", x=320, y=266, w=150, h=24),
+            Box(text="Asa Henriks Vag 2", x=120, y=296, w=220, h=24),
+        ]
+        expected = [
+            {
+                "start": "08:00",
+                "end": "12:00",
+                "title": "Mattias Rondolph Stadservice 4h",
+                "location": "",
+                "address": "Asa Henriks Vag 2",
+            }
+        ]
+        self.assert_layout(boxes, expected)
+
 
 if __name__ == "__main__":
     unittest.main()
