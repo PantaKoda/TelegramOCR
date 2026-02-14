@@ -360,6 +360,24 @@ class LayoutParserTests(unittest.TestCase):
         ]
         self.assert_layout(boxes, expected)
 
+    def test_stacked_times_keep_type_from_end_time_line_when_customer_row_has_noise(self) -> None:
+        boxes = [
+            Box(text="08:00 frida Haagg Snellman • ? 3h45m", x=36, y=473, w=360, h=24),
+            Box(text="11:45 ClickAndGo", x=38, y=507, w=170, h=24),
+            Box(text="Asa, Henriks vag 16", x=193, y=540, w=240, h=24),
+            Box(text="Collaborators +2", x=480, y=575, w=170, h=22),
+        ]
+        expected = [
+            {
+                "start": "08:00",
+                "end": "11:45",
+                "title": "frida Haagg Snellman • ? 3h45m ClickAndGo",
+                "location": "",
+                "address": "Asa, Henriks vag 16",
+            }
+        ]
+        self.assert_layout(boxes, expected)
+
     def test_stacked_times_keep_fuzzy_type_line_with_small_ocr_typo(self) -> None:
         boxes = [
             Box(text="08:00", x=38, y=210, w=60, h=22),
