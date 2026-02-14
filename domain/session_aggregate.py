@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from datetime import date
 
 from parser.entity_identity import customer_fingerprint
-from parser.semantic_normalizer import CanonicalShift
+from parser.semantic_normalizer import CanonicalShift, SHIFT_TYPE_PRIORITY
 
 
 @dataclass(frozen=True)
@@ -175,6 +175,7 @@ def _merge_shift(base: CanonicalShift, incoming: CanonicalShift) -> CanonicalShi
         selected_city = base.city
 
     selected_shift_type = _select_shift_type(base.shift_type, incoming.shift_type)
+    selected_raw_type_label = _select_better_raw_type_label(base.raw_type_label, incoming.raw_type_label)
 
     return CanonicalShift(
         start=_from_minutes_mod(start_minutes),
@@ -188,6 +189,7 @@ def _merge_shift(base: CanonicalShift, incoming: CanonicalShift) -> CanonicalShi
         city=selected_city,
         location_fingerprint=base.location_fingerprint,
         shift_type=selected_shift_type,
+        raw_type_label=selected_raw_type_label,
     )
 
 
@@ -204,7 +206,17 @@ def _select_shift_type(left: str, right: str) -> str:
         return right
     if right == "UNKNOWN":
         return left
-    return min(left, right)
+    left_priority = SHIFT_TYPE_PRIORITY.get(left, 0)
+    right_priority = SHIFT_TYPE_PRIORITY.get(right, 0)
+    if left_priority == right_priority:
+        return min(left, right)
+    return left if left_priority > right_priority else right
+
+
+def _select_better_raw_type_label(left: str, right: str) -> str:
+    left_key = (len(left.strip()), left.casefold())
+    right_key = (len(right.strip()), right.casefold())
+    return right if right_key > left_key else left
 
 
 def _address_length(shift: CanonicalShift) -> int:

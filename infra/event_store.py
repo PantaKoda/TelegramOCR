@@ -276,4 +276,5 @@ def _canonical_shift_from_dict(value: Any) -> CanonicalShift:
         city=str(value["city"]),
         location_fingerprint=str(value["location_fingerprint"]),
         shift_type=str(value["shift_type"]),
+        raw_type_label=str(value.get("raw_type_label", "")),
     )

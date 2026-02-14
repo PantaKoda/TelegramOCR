@@ -17,17 +17,70 @@ TRAILING_DURATION_RE = re.compile(
     r"(?:\b\d+\s*h(?:\s*\d+\s*m)?\b|\b\d+\s*m(?:in)?\b)\s*$",
     re.IGNORECASE,
 )
+TRAILING_PUNCT_RE = re.compile(r"^[\s\-–—:;,.!?()\[\]{}]+|[\s\-–—:;,.!?()\[\]{}]+$")
 COMPANY_NOISE_TOKENS = {"ab", "hb", "stadservice", "stadtjanst", "stadning"}
 JOB_TYPE_HINT_TOKENS = {
+    "lunch",
+    "restid",
+    "personalmote",
+    "utbildning",
+    "stadservice",
     "stadservice",
     "stadning",
     "storstadning",
+    "inledande",
+    "reklamation",
+    "omstadning",
+    "extra",
+    "fonsterputs",
+    "kylskapsrengoring",
+    "ugnsrengoring",
     "hemstadning",
     "kontor",
     "skola",
+    "nyckelhantering",
+    "forberedelser",
+    "disponibel",
+    "avbokade",
+    "avokade",
     "vard",
     "barn",
     "clickandgo",
+}
+
+SHIFT_TYPE_WORK = "WORK"
+SHIFT_TYPE_TRAVEL = "TRAVEL"
+SHIFT_TYPE_TRAINING = "TRAINING"
+SHIFT_TYPE_BREAK = "BREAK"
+SHIFT_TYPE_MEETING = "MEETING"
+SHIFT_TYPE_ADMIN = "ADMIN"
+SHIFT_TYPE_LEAVE = "LEAVE"
+SHIFT_TYPE_UNAVAILABLE = "UNAVAILABLE"
+SHIFT_TYPE_UNKNOWN = "UNKNOWN"
+
+SHIFT_TYPE_PRIORITY = {
+    SHIFT_TYPE_UNKNOWN: 0,
+    SHIFT_TYPE_BREAK: 1,
+    SHIFT_TYPE_TRAVEL: 2,
+    SHIFT_TYPE_MEETING: 3,
+    SHIFT_TYPE_ADMIN: 4,
+    SHIFT_TYPE_LEAVE: 5,
+    SHIFT_TYPE_TRAINING: 6,
+    SHIFT_TYPE_UNAVAILABLE: 7,
+    SHIFT_TYPE_WORK: 8,
+}
+
+ACTIVITY_LABEL_OVERRIDES = {
+    "thank you for today": "Thank You For Today",
+    "thank you for today!": "Thank You For Today",
+    "inter tid": "Inter Tid",
+    "personalmote": "Personalmote",
+    "vard av barn": "Vard Av Barn",
+    "nyckelhantering": "Nyckelhantering",
+    "forberedelser till iss": "Forberedelser Till Iss",
+    "ej disponibel": "Ej Disponibel",
+    "avbokade uppdrag": "Avbokade Uppdrag",
+    "avokade uppdrag": "Avbokade Uppdrag",
 }
 
 
@@ -44,6 +97,7 @@ class CanonicalShift:
     city: str
     location_fingerprint: str
     shift_type: str
+    raw_type_label: str = ""
 
 
 @dataclass(frozen=True)
@@ -58,16 +112,25 @@ class AddressParts:
 def normalize_entry(entry: Entry | dict[str, Any]) -> CanonicalShift:
     normalized = _coerce_entry(entry)
     customer_title, job_type_hint = _split_title_components(normalized.title)
-    customer_name = _normalize_customer_name(customer_title or normalized.title)
     address = _decompose_address(normalized.address, normalized.location)
-    shift_type = _classify_shift(normalized, address, job_type_hint=job_type_hint)
+    raw_type_label = _extract_raw_type_label(normalized, customer_title=customer_title, job_type_hint=job_type_hint)
+    shift_type = _classify_shift(normalized, address, raw_type_label=raw_type_label)
+    customer_name = _extract_customer_name(
+        normalized,
+        customer_title=customer_title,
+        job_type_hint=job_type_hint,
+        raw_type_label=raw_type_label,
+        shift_type=shift_type,
+        address=address,
+    )
     location_key = location_fingerprint(
         street=address.street,
         street_number=address.street_number,
         postal_area=address.postal_area,
         city=address.city,
     )
-    customer_key = customer_fingerprint(customer_name)
+    identity_anchor = customer_name or _normalize_customer_name(raw_type_label) or shift_type
+    customer_key = customer_fingerprint(identity_anchor)
 
     return CanonicalShift(
         start=_normalize_time(normalized.start, "start"),
@@ -81,6 +144,7 @@ def normalize_entry(entry: Entry | dict[str, Any]) -> CanonicalShift:
         city=address.city,
         location_fingerprint=location_key,
         shift_type=shift_type,
+        raw_type_label=raw_type_label,
     )
 
 
@@ -174,24 +238,102 @@ def _normalize_customer_name(value: str) -> str:
     return _to_title_case(" ".join(tokens))
 
 
-def _classify_shift(entry: Entry, address: AddressParts, *, job_type_hint: str) -> str:
+def _extract_customer_name(
+    entry: Entry,
+    *,
+    customer_title: str,
+    job_type_hint: str,
+    raw_type_label: str,
+    shift_type: str,
+    address: AddressParts,
+) -> str:
+    candidate = _normalize_customer_name(customer_title or entry.title)
+    if not raw_type_label:
+        return candidate
+    has_customer_hint = bool(_normalize_text(customer_title)) and bool(_normalize_text(job_type_hint))
+    has_location_context = bool(
+        address.street
+        or address.street_number
+        or address.city
+        or address.postal_code
+        or _normalize_text(entry.address)
+        or _normalize_text(entry.location)
+    )
+    if has_customer_hint or has_location_context:
+        return candidate
+    if shift_type in {
+        SHIFT_TYPE_BREAK,
+        SHIFT_TYPE_TRAVEL,
+        SHIFT_TYPE_MEETING,
+        SHIFT_TYPE_ADMIN,
+        SHIFT_TYPE_LEAVE,
+        SHIFT_TYPE_UNAVAILABLE,
+        SHIFT_TYPE_TRAINING,
+    }:
+        return ""
+    return candidate
+
+
+def _classify_shift(entry: Entry, address: AddressParts, *, raw_type_label: str) -> str:
+    normalized_raw = _normalize_text(raw_type_label).lower()
+    classified_raw = _classify_from_normalized_label(normalized_raw)
+    if classified_raw != SHIFT_TYPE_UNKNOWN:
+        return classified_raw
+
     combined = " ".join(
         [
             _normalize_text(entry.title).lower(),
             _normalize_text(entry.address).lower(),
             _normalize_text(entry.location).lower(),
-            _normalize_text(job_type_hint).lower(),
         ]
     )
-    if "skola" in combined:
-        return "SCHOOL"
-    if "kontor" in combined:
-        return "OFFICE"
-    if any(token in combined for token in ("stadservice", "stadning", "storstadning", "hemstadning", "vard av barn")):
-        return "HOME_VISIT"
+    classified_combined = _classify_from_normalized_label(combined)
+    if classified_combined != SHIFT_TYPE_UNKNOWN:
+        return classified_combined
     if "hem" in combined or (address.street and address.street_number):
-        return "HOME_VISIT"
-    return "UNKNOWN"
+        return SHIFT_TYPE_WORK
+    return SHIFT_TYPE_UNKNOWN
+
+
+def _classify_from_normalized_label(value: str) -> str:
+    if not value:
+        return SHIFT_TYPE_UNKNOWN
+
+    if any(token in value for token in ("restid", "inter tid")):
+        return SHIFT_TYPE_TRAVEL
+    if any(token in value for token in ("lunch", "rast", "thank you for today")):
+        return SHIFT_TYPE_BREAK
+    if "personalmote" in value:
+        return SHIFT_TYPE_MEETING
+    if any(token in value for token in ("nyckelhantering", "forberedelser till iss")):
+        return SHIFT_TYPE_ADMIN
+    if "vard av barn" in value:
+        return SHIFT_TYPE_LEAVE
+    if any(token in value for token in ("ej disponibel", "avbokade uppdrag", "avokade uppdrag")):
+        return SHIFT_TYPE_UNAVAILABLE
+    if "utbildning" in value:
+        return SHIFT_TYPE_TRAINING
+    if any(
+        token in value
+        for token in (
+            "stadservice",
+            "stadning",
+            "storstadning",
+            "inledande storstadning",
+            "reklamation",
+            "omstadning",
+            "extra stadtillfalle",
+            "fonsterputs",
+            "kylskapsrengoring",
+            "ugnsrengoring",
+            "clickandgo",
+            "skola",
+            "kontor",
+            "hemstadning",
+        )
+    ):
+        return SHIFT_TYPE_WORK
+    return SHIFT_TYPE_UNKNOWN
 
 
 def _split_title_components(value: str) -> tuple[str, str]:
@@ -214,6 +356,33 @@ def _split_title_components(value: str) -> tuple[str, str]:
         if normalized in JOB_TYPE_HINT_TOKENS:
             return _collapse_whitespace(" ".join(tokens[:index])), _collapse_whitespace(" ".join(tokens[index:]))
     return without_duration, ""
+
+
+def _extract_raw_type_label(entry: Entry, *, customer_title: str, job_type_hint: str) -> str:
+    if job_type_hint:
+        return _normalize_type_label(job_type_hint)
+
+    title_candidate = _normalize_type_label(entry.title)
+    if not title_candidate:
+        return ""
+
+    normalized = _normalize_text(title_candidate).lower()
+    if normalized in ACTIVITY_LABEL_OVERRIDES:
+        return ACTIVITY_LABEL_OVERRIDES[normalized]
+    if _classify_from_normalized_label(normalized) != SHIFT_TYPE_UNKNOWN:
+        return title_candidate
+    return ""
+
+
+def _normalize_type_label(value: str) -> str:
+    cleaned = _collapse_whitespace(value.replace("•", " ").replace("·", " "))
+    cleaned = _strip_trailing_duration(cleaned)
+    cleaned = TRAILING_PUNCT_RE.sub("", cleaned)
+    cleaned = _collapse_whitespace(cleaned)
+    if not cleaned:
+        return ""
+    normalized = _normalize_text(cleaned)
+    return _to_title_case(normalized)
 
 
 def _strip_trailing_duration(value: str) -> str:

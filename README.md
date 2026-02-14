@@ -50,7 +50,7 @@ Phase 5 adapter capabilities (not yet wired into `main.py` DB write path):
 Phase 6 semantic normalization capabilities (module-level, deterministic):
 
 - normalize parsed entries into canonical shift fields:
-  - `customer_name`, `street`, `street_number`, `postal_code`, `postal_area`, `city`, `shift_type`
+  - `customer_name`, `street`, `street_number`, `postal_code`, `postal_area`, `city`, `shift_type`, `raw_type_label`
 - Swedish-oriented address decomposition heuristics:
   - postal code pattern `NNN NN`
   - street + house number extraction
@@ -60,7 +60,10 @@ Phase 6 semantic normalization capabilities (module-level, deterministic):
   - normalize case/diacritics
   - remove common company suffix noise tokens (`AB`, `HB`, `Städservice`)
 - deterministic shift classification tags:
-  - `SCHOOL`, `OFFICE`, `HOME_VISIT`, `UNKNOWN`
+  - `WORK`, `TRAVEL`, `TRAINING`, `BREAK`, `MEETING`, `ADMIN`, `LEAVE`, `UNAVAILABLE`, `UNKNOWN`
+- dynamic raw job/activity label capture:
+  - `raw_type_label` stores parser-observed type text (e.g., `Stadservice`, `Lunch`, `Restid`, `Utbildning`)
+  - fixed `shift_type` remains normalized for stable diffing/aggregation
 - identity fields included in canonical shift output:
   - `location_fingerprint`
   - `customer_fingerprint`

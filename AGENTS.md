@@ -222,7 +222,9 @@ If the date cannot be resolved or is inconsistent:
     - customer name is extracted from the segment before `•`
     - trailing durations (e.g., `4h`, `2h 30m`) are stripped from customer/job hints
     - trailing job-type suffixes without `•` (e.g., `Name Stadservice 5h`) are also split for cleaner customer identity
-  - deterministic shift classification tags: `SCHOOL`, `OFFICE`, `HOME_VISIT`, `UNKNOWN`
+  - captures dynamic parser-observed job/activity label as `raw_type_label`
+  - deterministic shift classification tags: `WORK`, `TRAVEL`, `TRAINING`, `BREAK`, `MEETING`, `ADMIN`, `LEAVE`, `UNAVAILABLE`, `UNKNOWN`
+  - non-client activity rows (e.g., lunch/travel/training-only boxes) keep `customer_name` empty and carry semantics via `raw_type_label` + `shift_type`
   - canonical output now includes deterministic identity keys: `location_fingerprint`, `customer_fingerprint`
   - normalization tests in `tests/test_semantic_normalizer.py` (accent loss, missing postal code, multiline address join, OCR noise, canonical-location variants)
 - Phase 6.5 entity identity (pre-worker wiring):
