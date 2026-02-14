@@ -223,6 +223,9 @@ If the date cannot be resolved or is inconsistent:
     - trailing durations (e.g., `4h`, `2h 30m`) are stripped from customer/job hints
     - trailing job-type suffixes without `•` (e.g., `Name Stadservice 5h`) are also split for cleaner customer identity
   - captures dynamic parser-observed job/activity label as `raw_type_label`
+  - canonicalizes known OCR job/activity labels to stable forms (e.g., strips trailing counters/noise like `Lunch 1`/`Fonsterputs D` -> `Lunch`/`Fonsterputs`)
+  - resolves split activity phrases into a single label (`Ej Disponibel` remains one `raw_type_label`, not customer + type fragments)
+  - attempts type-label recovery from shifted context text (address/location lines) when OCR/layout pushes job type out of the title line
   - deterministic shift classification tags: `WORK`, `TRAVEL`, `TRAINING`, `BREAK`, `MEETING`, `ADMIN`, `LEAVE`, `UNAVAILABLE`, `UNKNOWN`
   - non-client activity rows (e.g., lunch/travel/training-only boxes) keep `customer_name` empty and carry semantics via `raw_type_label` + `shift_type`
   - canonical output now includes deterministic identity keys: `location_fingerprint`, `customer_fingerprint`

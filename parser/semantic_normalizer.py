@@ -17,6 +17,7 @@ TRAILING_DURATION_RE = re.compile(
     r"(?:\b\d+\s*h(?:\s*\d+\s*m)?\b|\b\d+\s*m(?:in)?\b)\s*$",
     re.IGNORECASE,
 )
+TRAILING_COUNTER_RE = re.compile(r"(?:\s+\d+)+\s*$")
 TRAILING_PUNCT_RE = re.compile(r"^[\s\-–—:;,.!?()\[\]{}]+|[\s\-–—:;,.!?()\[\]{}]+$")
 COMPANY_NOISE_TOKENS = {"ab", "hb", "stadservice", "stadtjanst", "stadning"}
 JOB_TYPE_HINT_TOKENS = {
@@ -81,6 +82,42 @@ ACTIVITY_LABEL_OVERRIDES = {
     "ej disponibel": "Ej Disponibel",
     "avbokade uppdrag": "Avbokade Uppdrag",
     "avokade uppdrag": "Avbokade Uppdrag",
+}
+
+KNOWN_TYPE_LABEL_PATTERNS: tuple[tuple[str, str], ...] = (
+    ("utbildning handledarhus", "Utbildning Handledarhus"),
+    ("forberedelser till iss", "Forberedelser Till Iss"),
+    ("avbokade uppdrag", "Avbokade Uppdrag"),
+    ("avokade uppdrag", "Avbokade Uppdrag"),
+    ("ej disponibel", "Ej Disponibel"),
+    ("extra stadtillfalle", "Extra Stadtillfalle"),
+    ("inledande storstadning", "Inledande Storstadning"),
+    ("reklamation omstadning", "Reklamation Omstadning"),
+    ("kylskapsrengoring", "Kylskapsrengoring"),
+    ("ugnsrengoring", "Ugnsrengoring"),
+    ("nyckelhantering", "Nyckelhantering"),
+    ("personalmote", "Personalmote"),
+    ("thank you for today", "Thank You For Today"),
+    ("inter tid", "Inter Tid"),
+    ("vard av barn", "Vard Av Barn"),
+    ("clickandgo", "ClickAndGo"),
+    ("storstadning", "Storstadning"),
+    ("stadservice", "Stadservice"),
+    ("reklamation", "Reklamation"),
+    ("fonsterputs", "Fonsterputs"),
+    ("utbildning", "Utbildning"),
+    ("restid", "Restid"),
+    ("lunch", "Lunch"),
+)
+
+NON_WORK_ACTIVITY_TYPES = {
+    SHIFT_TYPE_BREAK,
+    SHIFT_TYPE_TRAVEL,
+    SHIFT_TYPE_MEETING,
+    SHIFT_TYPE_ADMIN,
+    SHIFT_TYPE_LEAVE,
+    SHIFT_TYPE_UNAVAILABLE,
+    SHIFT_TYPE_TRAINING,
 }
 
 
@@ -250,6 +287,8 @@ def _extract_customer_name(
     candidate = _normalize_customer_name(customer_title or entry.title)
     if not raw_type_label:
         return candidate
+    combined_hint_label = _normalize_type_label(" ".join(token for token in (customer_title, job_type_hint) if token))
+    combined_hint_type = _classify_from_normalized_label(_normalize_text(combined_hint_label).lower()) if combined_hint_label else SHIFT_TYPE_UNKNOWN
     has_customer_hint = bool(_normalize_text(customer_title)) and bool(_normalize_text(job_type_hint))
     has_location_context = bool(
         address.street
@@ -259,17 +298,13 @@ def _extract_customer_name(
         or _normalize_text(entry.address)
         or _normalize_text(entry.location)
     )
+    if combined_hint_type in NON_WORK_ACTIVITY_TYPES and not has_location_context:
+        return ""
+    if shift_type in NON_WORK_ACTIVITY_TYPES and not has_location_context:
+        return ""
     if has_customer_hint or has_location_context:
         return candidate
-    if shift_type in {
-        SHIFT_TYPE_BREAK,
-        SHIFT_TYPE_TRAVEL,
-        SHIFT_TYPE_MEETING,
-        SHIFT_TYPE_ADMIN,
-        SHIFT_TYPE_LEAVE,
-        SHIFT_TYPE_UNAVAILABLE,
-        SHIFT_TYPE_TRAINING,
-    }:
+    if shift_type in NON_WORK_ACTIVITY_TYPES:
         return ""
     return candidate
 
@@ -359,30 +394,76 @@ def _split_title_components(value: str) -> tuple[str, str]:
 
 
 def _extract_raw_type_label(entry: Entry, *, customer_title: str, job_type_hint: str) -> str:
-    if job_type_hint:
-        return _normalize_type_label(job_type_hint)
+    combined_hint = _normalize_type_label(" ".join(token for token in (customer_title, job_type_hint) if token))
+    if combined_hint:
+        combined_normalized = _normalize_text(combined_hint).lower()
+        combined_classification = _classify_from_normalized_label(combined_normalized)
+        if combined_normalized in ACTIVITY_LABEL_OVERRIDES:
+            return ACTIVITY_LABEL_OVERRIDES[combined_normalized]
+        if combined_classification in NON_WORK_ACTIVITY_TYPES:
+            return _canonicalize_type_label(combined_hint)
 
-    title_candidate = _normalize_type_label(entry.title)
+    if job_type_hint:
+        return _canonicalize_type_label(job_type_hint)
+
+    title_candidate = _canonicalize_type_label(entry.title)
     if not title_candidate:
-        return ""
+        address_candidate = _extract_label_from_context_text(entry.address)
+        if address_candidate:
+            return address_candidate
+        return _extract_label_from_context_text(entry.location)
 
     normalized = _normalize_text(title_candidate).lower()
     if normalized in ACTIVITY_LABEL_OVERRIDES:
         return ACTIVITY_LABEL_OVERRIDES[normalized]
     if _classify_from_normalized_label(normalized) != SHIFT_TYPE_UNKNOWN:
         return title_candidate
+
+    address_candidate = _extract_label_from_context_text(entry.address)
+    if address_candidate:
+        return address_candidate
+    location_candidate = _extract_label_from_context_text(entry.location)
+    if location_candidate:
+        return location_candidate
     return ""
 
 
 def _normalize_type_label(value: str) -> str:
     cleaned = _collapse_whitespace(value.replace("•", " ").replace("·", " "))
     cleaned = _strip_trailing_duration(cleaned)
+    cleaned = TRAILING_COUNTER_RE.sub("", cleaned).strip()
     cleaned = TRAILING_PUNCT_RE.sub("", cleaned)
     cleaned = _collapse_whitespace(cleaned)
     if not cleaned:
         return ""
     normalized = _normalize_text(cleaned)
     return _to_title_case(normalized)
+
+
+def _canonicalize_type_label(value: str) -> str:
+    cleaned = _normalize_type_label(value)
+    if not cleaned:
+        return ""
+    canonical = _canonical_known_label(_normalize_text(cleaned).lower())
+    return canonical or cleaned
+
+
+def _extract_label_from_context_text(value: str) -> str:
+    normalized = _normalize_text(value).lower()
+    if not normalized:
+        return ""
+    return _canonical_known_label(normalized)
+
+
+def _canonical_known_label(normalized: str) -> str:
+    if not normalized:
+        return ""
+    if normalized in ACTIVITY_LABEL_OVERRIDES:
+        return ACTIVITY_LABEL_OVERRIDES[normalized]
+    for pattern, canonical in KNOWN_TYPE_LABEL_PATTERNS:
+        if re.search(rf"\b{re.escape(pattern)}\b", normalized):
+            return canonical
+    return ""
 
 
 def _strip_trailing_duration(value: str) -> str:
