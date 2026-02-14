@@ -239,6 +239,21 @@ class SemanticNormalizerTests(unittest.TestCase):
         self.assertEqual(normalized.raw_type_label, "Stadservice")
         self.assertEqual(normalized.shift_type, "WORK")
 
+    def test_numeric_job_type_hint_falls_back_to_context_label(self) -> None:
+        entry = Entry(
+            start="08:00",
+            end="12:00",
+            title="Mattias Rondolph • 1",
+            location="Stadservice",
+            address="Asa Henriks Vag 2",
+        )
+
+        normalized = normalize_entry(entry)
+
+        self.assertEqual(normalized.customer_name, "Mattias Rondolph")
+        self.assertEqual(normalized.raw_type_label, "Stadservice")
+        self.assertEqual(normalized.shift_type, "WORK")
+
 
 if __name__ == "__main__":
     unittest.main()

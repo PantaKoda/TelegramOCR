@@ -19,6 +19,7 @@ TRAILING_DURATION_RE = re.compile(
 )
 TRAILING_COUNTER_RE = re.compile(r"(?:\s+\d+)+\s*$")
 TRAILING_PUNCT_RE = re.compile(r"^[\s\-–—:;,.!?()\[\]{}]+|[\s\-–—:;,.!?()\[\]{}]+$")
+RAW_LABEL_WORD_RE = re.compile(r"[a-z]{2,}")
 COMPANY_NOISE_TOKENS = {"ab", "hb", "stadservice", "stadtjanst", "stadning"}
 JOB_TYPE_HINT_TOKENS = {
     "lunch",
@@ -404,7 +405,9 @@ def _extract_raw_type_label(entry: Entry, *, customer_title: str, job_type_hint:
             return _canonicalize_type_label(combined_hint)
 
     if job_type_hint:
-        return _canonicalize_type_label(job_type_hint)
+        hint_candidate = _canonicalize_type_label(job_type_hint)
+        if _is_usable_raw_type_label(hint_candidate):
+            return hint_candidate
 
     title_candidate = _canonicalize_type_label(entry.title)
     if not title_candidate:
@@ -464,6 +467,17 @@ def _canonical_known_label(normalized: str) -> str:
         if re.search(rf"\b{re.escape(pattern)}\b", normalized):
             return canonical
     return ""
+
+
+def _is_usable_raw_type_label(value: str) -> bool:
+    normalized = _normalize_text(value).lower()
+    if not normalized:
+        return False
+    if normalized in ACTIVITY_LABEL_OVERRIDES:
+        return True
+    if _canonical_known_label(normalized):
+        return True
+    return RAW_LABEL_WORD_RE.search(normalized) is not None
 
 
 def _strip_trailing_duration(value: str) -> str:
