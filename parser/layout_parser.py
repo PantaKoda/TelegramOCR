@@ -537,15 +537,23 @@ def _consume_leading_type_label(lines: list[str]) -> tuple[str, int]:
 
 
 def _choose_prefill_title(*candidates: str) -> str:
-    for candidate in candidates:
-        cleaned = _strip_noise_prefix(candidate)
+    cleaned_candidates = [_strip_noise_prefix(candidate) for candidate in candidates]
+    primary = cleaned_candidates[0] if cleaned_candidates else ""
+    secondary = cleaned_candidates[1] if len(cleaned_candidates) > 1 else ""
+
+    if primary and not _is_noise_line(primary) and secondary and not _is_noise_line(secondary):
+        if _looks_like_type_label(secondary) and secondary.casefold() not in primary.casefold():
+            # OCR often pushes the job type onto the end-time line (e.g. "11:45 ClickAndGo").
+            # Preserve it by appending to the primary title fragment before semantic split.
+            return _clean_text(f"{primary} {secondary}")
+
+    for cleaned in cleaned_candidates:
         if not cleaned:
             continue
         if _is_noise_line(cleaned):
             continue
         return cleaned
-    for candidate in candidates:
-        cleaned = _strip_noise_prefix(candidate)
+    for cleaned in cleaned_candidates:
         if cleaned:
             return cleaned
     return ""

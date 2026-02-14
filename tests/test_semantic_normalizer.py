@@ -269,6 +269,21 @@ class SemanticNormalizerTests(unittest.TestCase):
         self.assertEqual(normalized.raw_type_label, "Stadservice")
         self.assertEqual(normalized.shift_type, "WORK")
 
+    def test_noisy_duration_token_still_extracts_clickandgo_type(self) -> None:
+        entry = Entry(
+            start="08:00",
+            end="11:45",
+            title="frida Haagg Snellman • ? 3h45m ClickAndGo",
+            location="",
+            address="Asa Henriks Vag 16",
+        )
+
+        normalized = normalize_entry(entry)
+
+        self.assertEqual(normalized.customer_name, "Frida Haagg Snellman")
+        self.assertEqual(normalized.raw_type_label, "ClickAndGo")
+        self.assertEqual(normalized.shift_type, "WORK")
+
 
 if __name__ == "__main__":
     unittest.main()

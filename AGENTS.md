@@ -201,6 +201,7 @@ If the date cannot be resolved or is inconsistent:
   - deterministic pipeline: sort -> line clustering -> card grouping -> field extraction
   - time detection via regex (`HH:MM`/`HH.MM` ranges), normalized to `HH:MM`
   - supports stacked two-line time ranges (`start` on one line, `end` on next) by consolidating single-time markers in the same left time column, including cases where status/noise lines exist between them
+  - when stacked ranges include type text on the end-time line (e.g., `11:45 ClickAndGo`), parser appends that type fragment into the preserved title for the merged interval
   - strips UI-noise tokens (e.g., collaborator/status/duration lines such as `Collaborators`, `On time`, `4h`) before title/address/location assignment
   - when OCR pushes job/activity type to a separate trailing line, parser preserves and folds recognized type labels back into title (instead of dropping as metadata), including numeric/duration noise wrappers (e.g., `1`, `4h`)
   - prunes far-right trailing metadata chips inside cards (e.g., collaborator counters/icons) using geometry so address/location assignment stays stable under OCR text noise
