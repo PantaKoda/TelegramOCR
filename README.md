@@ -258,7 +258,7 @@ Optional:
 - `DB_SCHEMA` (default: `schedule_ingest`)
 - `WORKER_INPUT_MODE` (default: `fixture`; set `ocr` for real screenshot processing)
 - `FIXTURE_PAYLOAD_PATH` (default: `fixtures/sample_schedule.json`)
-- `OCR_DEFAULT_YEAR` (optional fallback year if OCR date text omits year, e.g. `2026`)
+- `OCR_DEFAULT_YEAR` (optional explicit fallback year if OCR date text omits year; when unset in `ocr` mode, worker defaults to current UTC year)
 - `WORKER_POLL_SECONDS` (default: `5`)
 - `WORKER_IDLE_LOG_EVERY` (default: `12`, log every N idle iterations; first idle iteration is always logged)
 - `ENABLE_CHAOS_PARSER` (default: `false`)

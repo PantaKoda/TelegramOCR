@@ -195,6 +195,8 @@ def load_runtime_config() -> WorkerRuntimeConfig:
     idle_log_every = _parse_positive_int_env("WORKER_IDLE_LOG_EVERY", 12)
     input_mode = _parse_input_mode(os.getenv("WORKER_INPUT_MODE", INPUT_MODE_FIXTURE))
     ocr_default_year = _parse_optional_int_env("OCR_DEFAULT_YEAR")
+    if input_mode == INPUT_MODE_OCR and ocr_default_year is None:
+        ocr_default_year = datetime.now(timezone.utc).year
     r2_config = _load_r2_config() if input_mode == INPUT_MODE_OCR else None
 
     return WorkerRuntimeConfig(
