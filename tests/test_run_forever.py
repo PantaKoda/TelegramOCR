@@ -236,6 +236,18 @@ class RunForeverFixtureParsingTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "missing year"):
             _extract_schedule_date_from_boxes(boxes, default_year=None)
 
+    def test_extract_schedule_date_prefers_weekday_header_over_plain_calendar_date(self) -> None:
+        boxes = [
+            # Calendar strip false-positive near top.
+            SimpleNamespace(text="6 February", x=20.0, y=60.0, h=10.0),
+            # Main header date line that should win.
+            SimpleNamespace(text="Friday 14 February", x=18.0, y=180.0, h=26.0),
+            # Simulate full screenshot height so top-band heuristic is realistic.
+            SimpleNamespace(text="Account", x=24.0, y=1700.0, h=18.0),
+        ]
+        parsed = _extract_schedule_date_from_boxes(boxes, default_year=2026)
+        self.assertEqual(parsed, date(2026, 2, 14))
+
 
 @unittest.skipUnless(DB_URL, "Integration test requires TEST_DATABASE_URL or DATABASE_URL")
 class RunForeverIterationIntegrationTests(unittest.TestCase):
