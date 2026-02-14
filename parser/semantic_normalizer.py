@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from difflib import SequenceMatcher
 import re
 import unicodedata
 from dataclasses import dataclass
@@ -120,6 +121,8 @@ NON_WORK_ACTIVITY_TYPES = {
     SHIFT_TYPE_UNAVAILABLE,
     SHIFT_TYPE_TRAINING,
 }
+KNOWN_LABEL_FUZZY_MIN_LEN = 5
+KNOWN_LABEL_FUZZY_THRESHOLD = 0.82
 
 
 @dataclass(frozen=True)
@@ -466,6 +469,9 @@ def _canonical_known_label(normalized: str) -> str:
     for pattern, canonical in KNOWN_TYPE_LABEL_PATTERNS:
         if re.search(rf"\b{re.escape(pattern)}\b", normalized):
             return canonical
+    fuzzy = _fuzzy_canonical_known_label(normalized)
+    if fuzzy:
+        return fuzzy
     return ""
 
 
@@ -478,6 +484,33 @@ def _is_usable_raw_type_label(value: str) -> bool:
     if _canonical_known_label(normalized):
         return True
     return RAW_LABEL_WORD_RE.search(normalized) is not None
+
+
+def _fuzzy_canonical_known_label(normalized: str) -> str:
+    tokens = [token for token in normalized.split() if token]
+    if not tokens:
+        return ""
+
+    candidates: set[str] = set()
+    for size in (1, 2, 3):
+        if len(tokens) < size:
+            continue
+        for index in range(len(tokens) - size + 1):
+            phrase = " ".join(tokens[index : index + size])
+            if len(phrase.replace(" ", "")) >= KNOWN_LABEL_FUZZY_MIN_LEN:
+                candidates.add(phrase)
+
+    best_score = 0.0
+    best_label = ""
+    for candidate in candidates:
+        for pattern, canonical in KNOWN_TYPE_LABEL_PATTERNS:
+            if abs(len(candidate) - len(pattern)) > 6:
+                continue
+            score = SequenceMatcher(None, candidate, pattern).ratio()
+            if score > best_score and score >= KNOWN_LABEL_FUZZY_THRESHOLD:
+                best_score = score
+                best_label = canonical
+    return best_label
 
 
 def _strip_trailing_duration(value: str) -> str:
