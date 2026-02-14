@@ -44,7 +44,7 @@ class SemanticNormalizerTests(unittest.TestCase):
         self.assertEqual(normalized.street_number, "316")
         self.assertEqual(normalized.postal_code, "")
         self.assertEqual(normalized.city, "Billdal")
-        self.assertEqual(normalized.shift_type, "HOME_VISIT")
+        self.assertEqual(normalized.shift_type, "WORK")
 
     def test_multiline_address_join_is_decomposed(self) -> None:
         entry = Entry(
@@ -131,7 +131,8 @@ class SemanticNormalizerTests(unittest.TestCase):
         normalized = normalize_entry(entry)
 
         self.assertEqual(normalized.customer_name, "Emma Gardmark")
-        self.assertEqual(normalized.shift_type, "HOME_VISIT")
+        self.assertEqual(normalized.shift_type, "WORK")
+        self.assertEqual(normalized.raw_type_label, "Storstadning")
 
     def test_trailing_job_type_without_bullet_extracts_customer(self) -> None:
         entry = Entry(
@@ -145,7 +146,38 @@ class SemanticNormalizerTests(unittest.TestCase):
         normalized = normalize_entry(entry)
 
         self.assertEqual(normalized.customer_name, "Jonas Hagenfeldt")
-        self.assertEqual(normalized.shift_type, "HOME_VISIT")
+        self.assertEqual(normalized.shift_type, "WORK")
+        self.assertEqual(normalized.raw_type_label, "Stadservice")
+
+    def test_activity_row_populates_raw_type_and_not_customer(self) -> None:
+        entry = Entry(
+            start="13:00",
+            end="13:15",
+            title="Lunch 15m",
+            location="",
+            address="",
+        )
+
+        normalized = normalize_entry(entry)
+
+        self.assertEqual(normalized.customer_name, "")
+        self.assertEqual(normalized.raw_type_label, "Lunch")
+        self.assertEqual(normalized.shift_type, "BREAK")
+
+    def test_training_row_without_customer_is_training_type(self) -> None:
+        entry = Entry(
+            start="16:00",
+            end="17:00",
+            title="Utbildning",
+            location="",
+            address="",
+        )
+
+        normalized = normalize_entry(entry)
+
+        self.assertEqual(normalized.customer_name, "")
+        self.assertEqual(normalized.raw_type_label, "Utbildning")
+        self.assertEqual(normalized.shift_type, "TRAINING")
 
 
 if __name__ == "__main__":

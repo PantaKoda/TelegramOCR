@@ -189,9 +189,10 @@ def _event_message(event: ScheduleEvent, baseline_day: date | None) -> str:
             f"{new_shift.get('city', 'unknown location')}"
         )
     if event.event_type == EVENT_TYPE_SHIFT_RECLASSIFIED:
+        type_text = new_shift.get("raw_type_label") or _shift_type_label(new_shift.get("shift_type", "UNKNOWN"))
         return (
             f"{day_upper} job updated to "
-            f"{_shift_type_label(new_shift.get('shift_type', 'UNKNOWN'))}"
+            f"{type_text}"
         )
     if event.event_type == EVENT_TYPE_SHIFT_RETITLED:
         return (
@@ -219,9 +220,18 @@ def _time_change_phrase(old_shift: dict[str, Any], new_shift: dict[str, Any]) ->
 
 def _shift_type_label(value: str) -> str:
     mapping = {
-        "SCHOOL": "School cleaning",
-        "OFFICE": "Office cleaning",
-        "HOME_VISIT": "Home visit",
+        "WORK": "Work shift",
+        "TRAVEL": "Travel",
+        "TRAINING": "Training",
+        "BREAK": "Break",
+        "MEETING": "Meeting",
+        "ADMIN": "Administrative task",
+        "LEAVE": "Leave",
+        "UNAVAILABLE": "Unavailable",
+        # Backward compatibility for older snapshots/events.
+        "SCHOOL": "Work shift",
+        "OFFICE": "Work shift",
+        "HOME_VISIT": "Work shift",
         "UNKNOWN": "Unknown job type",
     }
     return mapping.get(value, value.title())
