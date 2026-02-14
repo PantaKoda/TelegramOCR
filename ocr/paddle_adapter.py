@@ -30,6 +30,10 @@ def create_paddle_ocr() -> Any:
     return PaddleOCR(
         text_detection_model_name="PP-OCRv5_mobile_det",
         text_recognition_model_name="PP-OCRv5_mobile_rec",
+        # Keep CPU inference on Paddle runtime path; oneDNN has shown
+        # unsupported PIR attribute conversions in container deployments.
+        enable_mkldnn=False,
+        device="cpu",
         use_doc_orientation_classify=False,
         use_doc_unwarping=False,
         use_textline_orientation=False,
