@@ -189,6 +189,7 @@ If the date cannot be resolved or is inconsistent:
   - insert path uses `ON CONFLICT ... DO NOTHING RETURNING` to classify created vs existing row
   - `fixture` mode requires fixture payload field `schedule_date` (ISO date string)
   - `ocr` mode resolves `schedule_date` from OCR UI date text (uses `OCR_DEFAULT_YEAR` when provided; otherwise defaults missing-year dates to current UTC year)
+  - session-level date inheritance: if some images in a multi-image session miss a visible date header, they inherit the explicit date detected from another image in the same ordered session; conflicting explicit dates across images fail the session
   - date extraction ranking prefers strong header candidates (weekday-bearing lines, line-level grouped text, larger header geometry) over weaker calendar-strip day/month matches to reduce wrong-date false positives
   - computes next version per `(user_id, schedule_date)` from `day_schedule`
   - inserts one immutable `schedule_version` row only when canonical payload changed
@@ -252,11 +253,12 @@ If the date cannot be resolved or is inconsistent:
   - deterministic session aggregator in `domain/session_aggregate.py`
   - input shape: `list[list[CanonicalShift]]` (one list per screenshot in the same capture session)
   - shifts merge when `location_fingerprint` matches and time distance is within tolerance (default 5 minutes)
+  - fallback exact-time dedupe collapses cross-image duplicates when `start/end + customer_fingerprint + shift_type + raw_type_label` are equal, even if one OCR observation produced a noisy location fingerprint
   - time distance uses circular 24h math so cross-midnight observations merge correctly
   - containment fallback merges partial time observations when one range fully contains the other and identity matches
-  - merge policy keeps earliest start and latest end, prefers longer address fields, preserves identity keys, and tracks per-shift `source_count`
+  - merge policy keeps earliest start and latest end, prefers longer address fields, recomputes `location_fingerprint` from selected merged location fields, preserves identity keys, and tracks per-shift `source_count`
   - output shape: `AggregatedDaySchedule` with deduplicated `AggregatedShift` entries
-  - tests in `tests/test_session_aggregate.py` cover overlap dedupe, partial coverage union, jitter merge, same-time different-location separation, and triple-observation dedupe
+  - tests in `tests/test_session_aggregate.py` cover overlap dedupe, partial coverage union, jitter merge, same-time behavior, exact-time noisy-location duplicate collapse, and triple-observation dedupe
 - Phase 9 event store (durable history persistence):
   - infrastructure module in `infra/event_store.py`
   - pipeline helper performs: load previous snapshot -> diff -> persist events -> upsert day snapshot

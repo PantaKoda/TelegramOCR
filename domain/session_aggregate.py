@@ -5,9 +5,18 @@ from __future__ import annotations
 from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import date
+import re
 
-from parser.entity_identity import customer_fingerprint
+from parser.entity_identity import customer_fingerprint, location_fingerprint
 from parser.semantic_normalizer import CanonicalShift, SHIFT_TYPE_PRIORITY
+
+NOISY_LOCATION_TOKENS = {
+    "schedule",
+    "helphub",
+    "account",
+    "collaborators",
+    "profile",
+}
 
 
 @dataclass(frozen=True)
@@ -80,6 +89,7 @@ def aggregate_session_shifts(
         )
         for cluster in merged
     ]
+    aggregated = _dedupe_exact_identity_time(aggregated)
     aggregated.sort(
         key=lambda item: (
             _minutes(item.shift.start),
@@ -157,25 +167,48 @@ def _merge_shift(base: CanonicalShift, incoming: CanonicalShift) -> CanonicalShi
     end_minutes = max(base_end, incoming_end)
 
     selected_customer_name = _select_better_customer_name(base.customer_name, incoming.customer_name)
-    selected_customer_fingerprint = customer_fingerprint(selected_customer_name)
 
-    base_address_len = _address_length(base)
-    incoming_address_len = _address_length(incoming)
-    if incoming_address_len > base_address_len:
+    base_address_quality = _address_quality_score(base)
+    incoming_address_quality = _address_quality_score(incoming)
+    if incoming_address_quality > base_address_quality:
         selected_street = incoming.street
         selected_street_number = incoming.street_number
         selected_postal_code = incoming.postal_code
         selected_postal_area = incoming.postal_area
         selected_city = incoming.city
-    else:
+    elif incoming_address_quality < base_address_quality:
         selected_street = base.street
         selected_street_number = base.street_number
         selected_postal_code = base.postal_code
         selected_postal_area = base.postal_area
         selected_city = base.city
+    else:
+        base_address_len = _address_length(base)
+        incoming_address_len = _address_length(incoming)
+        if incoming_address_len > base_address_len:
+            selected_street = incoming.street
+            selected_street_number = incoming.street_number
+            selected_postal_code = incoming.postal_code
+            selected_postal_area = incoming.postal_area
+            selected_city = incoming.city
+        else:
+            selected_street = base.street
+            selected_street_number = base.street_number
+            selected_postal_code = base.postal_code
+            selected_postal_area = base.postal_area
+            selected_city = base.city
 
     selected_shift_type = _select_shift_type(base.shift_type, incoming.shift_type)
     selected_raw_type_label = _select_better_raw_type_label(base.raw_type_label, incoming.raw_type_label)
+    identity_anchor = selected_customer_name.strip() or selected_raw_type_label.strip() or selected_shift_type
+    selected_customer_fingerprint = customer_fingerprint(identity_anchor)
+
+    selected_location_fingerprint = location_fingerprint(
+        street=selected_street,
+        street_number=selected_street_number,
+        postal_area=selected_postal_area,
+        city=selected_city,
+    )
 
     return CanonicalShift(
         start=_from_minutes_mod(start_minutes),
@@ -187,10 +220,47 @@ def _merge_shift(base: CanonicalShift, incoming: CanonicalShift) -> CanonicalShi
         postal_code=selected_postal_code,
         postal_area=selected_postal_area,
         city=selected_city,
-        location_fingerprint=base.location_fingerprint,
+        location_fingerprint=selected_location_fingerprint,
         shift_type=selected_shift_type,
         raw_type_label=selected_raw_type_label,
     )
+
+
+def _dedupe_exact_identity_time(values: list[AggregatedShift]) -> list[AggregatedShift]:
+    grouped: dict[tuple[str, str, str, str, str], list[AggregatedShift]] = defaultdict(list)
+    for item in values:
+        key = (
+            item.shift.start,
+            item.shift.end,
+            item.shift.customer_fingerprint,
+            item.shift.shift_type,
+            item.shift.raw_type_label.casefold(),
+        )
+        grouped[key].append(item)
+
+    deduped: list[AggregatedShift] = []
+    for key in sorted(grouped.keys()):
+        items = grouped[key]
+        if len(items) == 1:
+            deduped.append(items[0])
+            continue
+
+        merged_shift = items[0].shift
+        merged_notes = set(items[0].notes)
+        merged_source_count = items[0].source_count
+        for item in items[1:]:
+            merged_shift = _merge_shift(merged_shift, item.shift)
+            merged_source_count += item.source_count
+            merged_notes.update(item.notes)
+
+        deduped.append(
+            AggregatedShift(
+                shift=merged_shift,
+                source_count=merged_source_count,
+                notes=tuple(sorted(merged_notes)),
+            )
+        )
+    return deduped
 
 
 def _select_better_customer_name(left: str, right: str) -> str:
@@ -224,6 +294,34 @@ def _address_length(shift: CanonicalShift) -> int:
         token for token in [shift.street, shift.street_number, shift.postal_code, shift.postal_area, shift.city] if token
     )
     return len(value)
+
+
+def _address_quality_score(shift: CanonicalShift) -> int:
+    score = 0
+    if shift.street.strip():
+        score += 40 + min(len(shift.street.strip()), 40)
+    if shift.street_number.strip():
+        score += 12
+    if shift.postal_code.strip():
+        score += 10
+    if shift.postal_area.strip():
+        score += 8
+    if shift.city.strip():
+        score += 12 + min(len(shift.city.strip()), 20)
+
+    text = " ".join(
+        token
+        for token in [shift.street, shift.street_number, shift.postal_code, shift.postal_area, shift.city]
+        if token
+    ).casefold()
+    text = re.sub(r"\s+", " ", text).strip()
+
+    for token in NOISY_LOCATION_TOKENS:
+        if re.search(rf"\b{re.escape(token)}\b", text):
+            score -= 80
+    if "?" in text or "+" in text:
+        score -= 15
+    return score
 
 
 def _extract_notes(shift: CanonicalShift) -> tuple[str, ...]:

@@ -322,7 +322,8 @@ def run_iteration(
                     raise WorkerStageError("ocr", "Failed creating R2 client.", cause=error) from error
 
             image_shifts: list[list[CanonicalShift]] = []
-            image_dates: list[date] = []
+            image_dates: list[date | None] = []
+            date_extraction_errors: list[tuple[str, Exception]] = []
             total_boxes = 0
 
             for image in images:
@@ -344,18 +345,49 @@ def run_iteration(
                     raise WorkerStageError("ocr", f"Failed OCR on image: {key}", cause=error) from error
 
                 total_boxes += len(boxes)
+                extracted_image_date: date | None = None
                 try:
-                    image_date = _extract_schedule_date_from_boxes(boxes, default_year=config.ocr_default_year)
+                    extracted_image_date = _extract_schedule_date_from_boxes(boxes, default_year=config.ocr_default_year)
+                except Exception as error:
+                    date_extraction_errors.append((key, error))
+
+                try:
                     layout_entries = parse_layout(boxes)
                     canonical = normalize_entries(layout_entries)
                     canonical.sort(key=_canonical_shift_sort_key)
                 except Exception as error:
                     raise WorkerStageError("layout", f"Failed layout parsing for image: {key}", cause=error) from error
 
-                image_dates.append(image_date)
+                image_dates.append(extracted_image_date)
                 image_shifts.append(canonical)
 
-            schedule_date = _ensure_single_schedule_date(image_dates)
+            try:
+                schedule_date, resolved_image_dates, inherited_image_count = _resolve_session_schedule_dates(image_dates)
+            except Exception as error:
+                if image_dates and all(value is None for value in image_dates) and date_extraction_errors:
+                    failed_key, failed_error = date_extraction_errors[0]
+                    raise WorkerStageError(
+                        "date",
+                        f"Failed resolving schedule date across session images; first date extraction failure on image: {failed_key}",
+                        cause=failed_error,
+                    ) from failed_error
+                raise WorkerStageError("date", "Failed resolving schedule date across session images.", cause=error) from error
+
+            if inherited_image_count > 0:
+                logger.info(
+                    "Session date inherited for images without date header",
+                    extra={
+                        "event": "session.date_inherited",
+                        "session_id": session_id or None,
+                        "user_id": context["user_id"],
+                        "correlation_id": context["correlation_id"],
+                        "schedule_date": schedule_date.isoformat(),
+                        "inherited_image_count": inherited_image_count,
+                        "image_count": len(images),
+                    },
+                )
+
+            schedule_date = _ensure_single_schedule_date(resolved_image_dates)
             aggregated = aggregate_session_shifts(image_shifts, schedule_date=schedule_date.isoformat())
             canonical_shifts = [item.shift for item in aggregated.shifts]
             canonical_shifts.sort(key=_canonical_shift_sort_key)
@@ -985,6 +1017,20 @@ def _ensure_single_schedule_date(values: list[date]) -> date:
         rendered = ", ".join(value.isoformat() for value in unique)
         raise RuntimeError(f"Inconsistent schedule dates detected across session images: {rendered}")
     return unique[0]
+
+
+def _resolve_session_schedule_dates(values: list[date | None]) -> tuple[date, list[date], int]:
+    if not values:
+        raise RuntimeError("No session images available for schedule date resolution.")
+
+    explicit_dates = [value for value in values if value is not None]
+    if not explicit_dates:
+        raise RuntimeError("No schedule date detected from OCR output.")
+
+    anchor_date = _ensure_single_schedule_date(explicit_dates)
+    resolved = [value if value is not None else anchor_date for value in values]
+    inherited_count = sum(1 for value in values if value is None)
+    return anchor_date, resolved, inherited_count
 
 
 def _should_log_idle_iteration(idle_iteration_streak: int, idle_log_every: int) -> bool:
