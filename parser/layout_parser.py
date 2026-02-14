@@ -12,6 +12,30 @@ TIME_RANGE_RE = re.compile(r"\b(\d{1,2})[:.](\d{2})(?:\s*-\s*(\d{1,2})[:.](\d{2}
 LEADING_SINGLE_TIME_RE = re.compile(r"^\s*(\d{1,2})[:.](\d{2})(?:\s+(.*\S))?\s*$")
 DURATION_RE = re.compile(r"^\s*\d+\s*h(?:\s*\d+\s*m)?\s*$|^\s*\d+\s*m(?:in)?\s*$", re.IGNORECASE)
 NOISE_PREFIX_RE = re.compile(r"^(?:on\s*time|collaborators?(?:\s*\+?\d+)?)\b[:\-]?\s*", re.IGNORECASE)
+TYPE_LABEL_HINTS = (
+    "stadservice",
+    "stadning",
+    "storstadning",
+    "inledande storstadning",
+    "reklamation",
+    "omstadning",
+    "extra stadtillfalle",
+    "fonsterputs",
+    "kylskapsrengoring",
+    "ugnsrengoring",
+    "clickandgo",
+    "utbildning",
+    "personalmote",
+    "lunch",
+    "restid",
+    "inter tid",
+    "vard av barn",
+    "nyckelhantering",
+    "forberedelser till iss",
+    "ej disponibel",
+    "avbokade uppdrag",
+    "avokade uppdrag",
+)
 
 
 @dataclass(frozen=True)
@@ -286,6 +310,10 @@ def _parse_card_entries(lines: list[_Line]) -> list[tuple[Entry, float, float]]:
         trailing_line_objects = _prune_far_right_metadata_lines(trailing_line_objects)
         trailing_lines = [_strip_noise_prefix(line.text) for line in trailing_line_objects]
         trailing_lines = [line for line in trailing_lines if line and not _is_noise_line(line)]
+        type_suffix, consumed = _consume_leading_type_label(trailing_lines)
+        if type_suffix:
+            title = _clean_text(f"{title} {type_suffix}")
+            trailing_lines = trailing_lines[consumed:]
         if not trailing_lines:
             address = ""
             location = ""
@@ -474,10 +502,30 @@ def _prune_far_right_metadata_lines(lines: list[_Line]) -> list[_Line]:
     threshold = max(140.0, median(max(line.h, 1.0) for line in lines) * 7.0)
     kept: list[_Line] = []
     for line in lines:
-        if (line.x - base_x) > threshold and not _looks_like_address(line.text):
+        if (
+            (line.x - base_x) > threshold
+            and not _looks_like_address(line.text)
+            and not _looks_like_type_label(line.text)
+        ):
             continue
         kept.append(line)
     return kept if kept else lines
+
+
+def _consume_leading_type_label(lines: list[str]) -> tuple[str, int]:
+    if not lines:
+        return "", 0
+
+    first = _clean_text(lines[0])
+    if first and _looks_like_type_label(first):
+        return first, 1
+
+    if len(lines) >= 2:
+        combined = _clean_text(f"{lines[0]} {lines[1]}")
+        if combined and _looks_like_type_label(combined):
+            return combined, 2
+
+    return "", 0
 
 
 def _choose_prefill_title(*candidates: str) -> str:
@@ -547,6 +595,18 @@ def _looks_like_address(value: str) -> bool:
     if "," in value:
         return True
     return bool(re.search(r"\b(vagen|vag|gatan|street|road|avenyn|alle|plats|gr[aä]nd)\b", normalized))
+
+
+def _looks_like_type_label(value: str) -> bool:
+    normalized = _normalize_for_match(value)
+    if not normalized:
+        return False
+    if any(char.isdigit() for char in normalized):
+        return False
+    for hint in TYPE_LABEL_HINTS:
+        if re.search(rf"\b{re.escape(hint)}\b", normalized):
+            return True
+    return False
 
 
 def _strip_noise_prefix(value: str) -> str:
