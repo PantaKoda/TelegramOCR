@@ -254,6 +254,21 @@ class SemanticNormalizerTests(unittest.TestCase):
         self.assertEqual(normalized.raw_type_label, "Stadservice")
         self.assertEqual(normalized.shift_type, "WORK")
 
+    def test_fuzzy_work_type_label_is_canonicalized(self) -> None:
+        entry = Entry(
+            start="08:00",
+            end="12:00",
+            title="Frida Haagg Snellman • Stadservic",
+            location="",
+            address="Asa Henriks Vag 16",
+        )
+
+        normalized = normalize_entry(entry)
+
+        self.assertEqual(normalized.customer_name, "Frida Haagg Snellman")
+        self.assertEqual(normalized.raw_type_label, "Stadservice")
+        self.assertEqual(normalized.shift_type, "WORK")
+
 
 if __name__ == "__main__":
     unittest.main()
