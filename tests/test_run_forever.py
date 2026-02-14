@@ -3,7 +3,7 @@ import tempfile
 import uuid
 import unittest
 import logging
-from datetime import date
+from datetime import date, datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import patch
 import json
@@ -92,6 +92,20 @@ class RunForeverConfigTests(unittest.TestCase):
         with patch.dict(os.environ, env, clear=True):
             with self.assertRaisesRegex(RuntimeError, "Missing required environment variable"):
                 load_runtime_config()
+
+    def test_load_runtime_config_ocr_mode_defaults_year_to_current_utc(self) -> None:
+        env = {
+            "DATABASE_URL": "postgresql://user:pass@localhost:5432/db",
+            "WORKER_INPUT_MODE": "ocr",
+            "R2_ENDPOINT_URL": "https://example.r2.cloudflarestorage.com",
+            "R2_ACCESS_KEY_ID": "abc",
+            "R2_SECRET_ACCESS_KEY": "def",
+            "R2_BUCKET": "telegram-images",
+        }
+        with patch.dict(os.environ, env, clear=True):
+            config = load_runtime_config()
+        self.assertEqual(config.input_mode, "ocr")
+        self.assertEqual(config.ocr_default_year, datetime.now(timezone.utc).year)
 
     def test_load_runtime_config_requires_database_url(self) -> None:
         with patch.dict(os.environ, {}, clear=True):

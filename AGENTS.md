@@ -188,7 +188,7 @@ If the date cannot be resolved or is inconsistent:
   - serializes per `(user_id, schedule_date)` writes with transactional advisory lock
   - insert path uses `ON CONFLICT ... DO NOTHING RETURNING` to classify created vs existing row
   - `fixture` mode requires fixture payload field `schedule_date` (ISO date string)
-  - `ocr` mode resolves `schedule_date` from OCR UI date text (with optional `OCR_DEFAULT_YEAR` fallback when year is omitted)
+  - `ocr` mode resolves `schedule_date` from OCR UI date text (uses `OCR_DEFAULT_YEAR` when provided; otherwise defaults missing-year dates to current UTC year)
   - computes next version per `(user_id, schedule_date)` from `day_schedule`
   - inserts one immutable `schedule_version` row only when canonical payload changed
   - when canonical payload hash matches latest version, marks session done without inserting new version
