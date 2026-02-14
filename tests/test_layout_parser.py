@@ -249,6 +249,38 @@ class LayoutParserTests(unittest.TestCase):
             parsed_hash = hashlib.sha256(json.dumps(parsed, sort_keys=True).encode("utf-8")).hexdigest()
             self.assertEqual(parsed_hash, baseline_hash)
 
+    def test_stacked_time_lines_and_ui_noise_are_parsed_correctly(self) -> None:
+        boxes = [
+            Box(text="08:00", x=38, y=210, w=60, h=22),
+            Box(text="12:00", x=40, y=236, w=60, h=22),
+            Box(text="On time", x=42, y=262, w=80, h=22),
+            Box(text="Pia Lindkvist Stadservice", x=118, y=238, w=250, h=24),
+            Box(text="LINDOME, Diabasvagen 7", x=120, y=268, w=250, h=24),
+            Box(text="Collaborators", x=124, y=296, w=130, h=22),
+            Box(text="12:00", x=38, y=390, w=60, h=22),
+            Box(text="15:45", x=40, y=416, w=60, h=22),
+            Box(text="Jonas Hagenfeldt Stadservice", x=118, y=418, w=290, h=24),
+            Box(text="KALLERED, Stenmursvagen 44", x=120, y=448, w=300, h=24),
+            Box(text="Collaborators +3", x=124, y=476, w=170, h=22),
+        ]
+        expected = [
+            {
+                "start": "08:00",
+                "end": "12:00",
+                "title": "Pia Lindkvist Stadservice",
+                "location": "",
+                "address": "LINDOME, Diabasvagen 7",
+            },
+            {
+                "start": "12:00",
+                "end": "15:45",
+                "title": "Jonas Hagenfeldt Stadservice",
+                "location": "",
+                "address": "KALLERED, Stenmursvagen 44",
+            },
+        ]
+        self.assert_layout(boxes, expected)
+
 
 if __name__ == "__main__":
     unittest.main()

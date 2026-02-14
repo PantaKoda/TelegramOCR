@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 import re
+import unicodedata
 from dataclasses import dataclass
 from statistics import median
 from typing import Any
 
 TIME_RANGE_RE = re.compile(r"\b(\d{1,2})[:.](\d{2})(?:\s*-\s*(\d{1,2})[:.](\d{2}))?\b")
+LEADING_SINGLE_TIME_RE = re.compile(r"^\s*(\d{1,2})[:.](\d{2})(?:\s+(.*\S))?\s*$")
+DURATION_RE = re.compile(r"^\s*\d+\s*h(?:\s*\d+\s*m)?\s*$|^\s*\d+\s*m(?:in)?\s*$", re.IGNORECASE)
+NOISE_PREFIX_RE = re.compile(r"^(?:on\s*time|collaborators?(?:\s*\+?\d+)?)\b[:\-]?\s*", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -34,6 +38,13 @@ class _Line:
     x: float
     y: float
     h: float
+
+
+@dataclass(frozen=True)
+class _ParsedTime:
+    start: str
+    end: str
+    is_range: bool
 
 
 def parse_layout(boxes: list[Box]) -> list[Entry]:
@@ -75,7 +86,7 @@ def _clean_text(value: str) -> str:
     return " ".join(value.split())
 
 
-def _time_or_none(text: str) -> tuple[str, str] | None:
+def _time_or_none(text: str) -> _ParsedTime | None:
     match = TIME_RANGE_RE.search(text)
     if match is None:
         return None
@@ -85,12 +96,12 @@ def _time_or_none(text: str) -> tuple[str, str] | None:
         return None
 
     if match.group(3) is None or match.group(4) is None:
-        return (start, start)
+        return _ParsedTime(start=start, end=start, is_range=False)
 
     end = _normalize_time(int(match.group(3)), int(match.group(4)))
     if end is None:
         return None
-    return (start, end)
+    return _ParsedTime(start=start, end=end, is_range=True)
 
 
 def _normalize_time(hour: int, minute: int) -> str | None:
@@ -217,7 +228,7 @@ def _parse_card_entries(lines: list[_Line]) -> list[tuple[Entry, float, float]]:
     if not lines:
         return []
 
-    time_indices: list[tuple[int, tuple[str, str]]] = []
+    time_indices: list[tuple[int, _ParsedTime]] = []
     for index, line in enumerate(lines):
         parsed_time = _time_or_none(line.text)
         if parsed_time is not None:
@@ -227,58 +238,170 @@ def _parse_card_entries(lines: list[_Line]) -> list[tuple[Entry, float, float]]:
     if not time_indices:
         return []
 
+    markers = _consolidate_time_markers(time_indices, lines)
+    occupied_time_indexes: set[int] = set()
+    for marker in markers:
+        occupied_time_indexes.update(range(marker["start_index"], marker["end_index"] + 1))
+
     results: list[tuple[Entry, float, float]] = []
-    for position, (time_index, parsed_time) in enumerate(time_indices):
-        previous_time = time_indices[position - 1][0] if position > 0 else -1
-        next_time = time_indices[position + 1][0] if position + 1 < len(time_indices) else len(lines)
+    for position, marker in enumerate(markers):
+        previous_end = markers[position - 1]["end_index"] if position > 0 else -1
+        next_start = markers[position + 1]["start_index"] if position + 1 < len(markers) else len(lines)
 
         before_indices = [
             index
-            for index in range(previous_time + 1, time_index)
-            if _time_or_none(lines[index].text) is None and _clean_text(lines[index].text)
+            for index in range(previous_end + 1, marker["start_index"])
+            if index not in occupied_time_indexes and _clean_text(lines[index].text) and not _is_noise_line(lines[index].text)
         ]
         after_indices = [
             index
-            for index in range(time_index + 1, next_time)
-            if _time_or_none(lines[index].text) is None and _clean_text(lines[index].text)
+            for index in range(marker["end_index"] + 1, next_start)
+            if index not in occupied_time_indexes and _clean_text(lines[index].text) and not _is_noise_line(lines[index].text)
         ]
 
-        title_parts: list[str] = []
+        title = ""
         trailing_indices: list[int] = []
-        if before_indices and (position == 0 or not after_indices):
-            # Handles title lines that appear above the first time line.
-            title_parts = [_clean_text(lines[index].text) for index in before_indices]
+        prefixed_title = _strip_noise_prefix(str(marker.get("prefill_title", "")))
+        if prefixed_title and not _is_noise_line(prefixed_title):
+            title = prefixed_title
             trailing_indices = after_indices
-        elif after_indices:
-            title_parts = [_clean_text(lines[after_indices[0]].text)]
-            trailing_indices = after_indices[1:]
-        elif before_indices:
-            title_parts = [_clean_text(lines[before_indices[-1]].text)]
-            trailing_indices = []
+        else:
+            title_parts: list[str] = []
+            if before_indices and (position == 0 or not after_indices):
+                # Handles title lines that appear above the first time line.
+                title_parts = [_strip_noise_prefix(lines[index].text) for index in before_indices]
+                trailing_indices = after_indices
+            elif after_indices:
+                title_parts = [_strip_noise_prefix(lines[after_indices[0]].text)]
+                trailing_indices = after_indices[1:]
+            elif before_indices:
+                title_parts = [_strip_noise_prefix(lines[before_indices[-1]].text)]
+                trailing_indices = []
 
-        title = _clean_text(" ".join(title_parts))
+            title = _clean_text(" ".join(title_parts))
         if not title:
             continue
 
-        trailing_lines = [_clean_text(lines[index].text) for index in trailing_indices]
+        trailing_lines = [_strip_noise_prefix(lines[index].text) for index in trailing_indices]
+        trailing_lines = [line for line in trailing_lines if line and not _is_noise_line(line)]
         if not trailing_lines:
             address = ""
             location = ""
         elif len(trailing_lines) == 1:
-            address = ""
-            location = trailing_lines[0]
+            if _looks_like_address(trailing_lines[0]):
+                address = trailing_lines[0]
+                location = ""
+            else:
+                address = ""
+                location = trailing_lines[0]
         else:
             address = " ".join(trailing_lines[:-1])
             location = trailing_lines[-1]
 
         entry = Entry(
-            start=parsed_time[0],
-            end=parsed_time[1],
+            start=marker["time"].start,
+            end=marker["time"].end,
             title=title,
             location=location,
             address=address,
         )
-        anchor = lines[time_index]
+        anchor = lines[marker["anchor_index"]]
         results.append((entry, anchor.y, anchor.x))
 
     return results
+
+
+def _consolidate_time_markers(markers: list[tuple[int, _ParsedTime]], lines: list[_Line]) -> list[dict[str, Any]]:
+    combined: list[dict[str, Any]] = []
+    index = 0
+    while index < len(markers):
+        current_index, current_time = markers[index]
+        current_leading = _leading_single_time(lines[current_index].text)
+        current_prefill = current_leading[1] if current_leading is not None else ""
+        if not current_time.is_range and index + 1 < len(markers):
+            next_index, next_time = markers[index + 1]
+            next_leading = _leading_single_time(lines[next_index].text)
+            if (
+                not next_time.is_range
+                and next_index == current_index + 1
+                and current_leading is not None
+                and next_leading is not None
+                and current_leading[0] == current_time.start
+                and next_leading[0] == next_time.start
+            ):
+                next_prefill = next_leading[1]
+                combined.append(
+                    {
+                        "start_index": current_index,
+                        "end_index": next_index,
+                        "anchor_index": current_index,
+                        "time": _ParsedTime(start=current_time.start, end=next_time.start, is_range=True),
+                        "prefill_title": next_prefill or current_prefill,
+                    }
+                )
+                index += 2
+                continue
+        combined.append(
+            {
+                "start_index": current_index,
+                "end_index": current_index,
+                "anchor_index": current_index,
+                "time": current_time,
+                "prefill_title": current_prefill,
+            }
+        )
+        index += 1
+    return combined
+
+
+def _leading_single_time(value: str) -> tuple[str, str] | None:
+    match = LEADING_SINGLE_TIME_RE.fullmatch(value)
+    if match is None:
+        return None
+    parsed = _normalize_time(int(match.group(1)), int(match.group(2)))
+    if parsed is None:
+        return None
+    remainder = _clean_text(match.group(3) or "")
+    return parsed, remainder
+
+
+def _normalize_for_match(value: str) -> str:
+    normalized = unicodedata.normalize("NFKD", value)
+    without_marks = "".join(char for char in normalized if not unicodedata.combining(char))
+    return " ".join(without_marks.lower().split())
+
+
+def _is_noise_line(value: str) -> bool:
+    normalized = _normalize_for_match(_strip_noise_prefix(value))
+    if not normalized:
+        return True
+    if "collaborator" in normalized:
+        return True
+    if normalized in {"on time", "ontime", "thank you for today", "thank you for today!"}:
+        return True
+    if DURATION_RE.fullmatch(normalized):
+        return True
+    if re.fullmatch(r"\+?\d+", normalized):
+        return True
+    return False
+
+
+def _looks_like_address(value: str) -> bool:
+    normalized = _normalize_for_match(value)
+    if any(char.isdigit() for char in normalized):
+        return True
+    if "," in value:
+        return True
+    return bool(re.search(r"\b(vagen|vag|gatan|street|road|avenyn|alle|plats|gr[aä]nd)\b", normalized))
+
+
+def _strip_noise_prefix(value: str) -> str:
+    cleaned = _clean_text(value)
+    if not cleaned:
+        return ""
+    previous = None
+    current = cleaned
+    while previous != current:
+        previous = current
+        current = NOISE_PREFIX_RE.sub("", current).strip()
+    return _clean_text(current)

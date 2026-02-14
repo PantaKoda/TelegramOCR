@@ -200,6 +200,9 @@ If the date cannot be resolved or is inconsistent:
   - input: flat list of OCR-like boxes (`text`, `x`, `y`, `w`, `h`)
   - deterministic pipeline: sort -> line clustering -> card grouping -> field extraction
   - time detection via regex (`HH:MM`/`HH.MM` ranges), normalized to `HH:MM`
+  - supports stacked two-line time ranges (`start` on one line, `end` on next) by consolidating adjacent single-time markers into one shift interval
+  - strips UI-noise tokens (e.g., collaborator/status/duration lines such as `Collaborators`, `On time`, `4h`) before title/address/location assignment
+  - treats single trailing metadata line as address when it matches address-like features (digits, comma, common street tokens), reducing location/address inversion
   - output entry fields: `start`, `end`, `title`, `location`, `address`
   - top chrome/header cards without time lines are ignored
 - Phase 5 OCR adapter (pre-worker wiring):
