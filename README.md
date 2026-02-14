@@ -63,6 +63,8 @@ Phase 6 semantic normalization capabilities (module-level, deterministic):
   - `WORK`, `TRAVEL`, `TRAINING`, `BREAK`, `MEETING`, `ADMIN`, `LEAVE`, `UNAVAILABLE`, `UNKNOWN`
 - dynamic raw job/activity label capture:
   - `raw_type_label` stores parser-observed type text (e.g., `Stadservice`, `Lunch`, `Restid`, `Utbildning`)
+  - known OCR noise is normalized for stable labels (e.g., `Lunch 1` -> `Lunch`, `Fonsterputs D` -> `Fonsterputs`)
+  - split activity phrases are rejoined when detected (e.g., `Ej Disponibel`)
   - fixed `shift_type` remains normalized for stable diffing/aggregation
 - identity fields included in canonical shift output:
   - `location_fingerprint`

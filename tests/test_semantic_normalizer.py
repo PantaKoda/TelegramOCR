@@ -179,6 +179,66 @@ class SemanticNormalizerTests(unittest.TestCase):
         self.assertEqual(normalized.raw_type_label, "Utbildning")
         self.assertEqual(normalized.shift_type, "TRAINING")
 
+    def test_activity_label_with_trailing_counter_strips_counter(self) -> None:
+        entry = Entry(
+            start="12:00",
+            end="12:30",
+            title="Lunch 1",
+            location="",
+            address="",
+        )
+
+        normalized = normalize_entry(entry)
+
+        self.assertEqual(normalized.customer_name, "")
+        self.assertEqual(normalized.raw_type_label, "Lunch")
+        self.assertEqual(normalized.shift_type, "BREAK")
+
+    def test_work_type_label_with_trailing_ocr_token_is_canonicalized(self) -> None:
+        entry = Entry(
+            start="13:00",
+            end="14:30",
+            title="Lena Falk • Fonsterputs D",
+            location="",
+            address="Kullavik Sandlyckans Vag 104",
+        )
+
+        normalized = normalize_entry(entry)
+
+        self.assertEqual(normalized.customer_name, "Lena Falk")
+        self.assertEqual(normalized.raw_type_label, "Fonsterputs")
+        self.assertEqual(normalized.shift_type, "WORK")
+
+    def test_split_unavailable_label_rejoins_and_clears_customer_name(self) -> None:
+        entry = Entry(
+            start="14:30",
+            end="17:00",
+            title="Ej Disponibel",
+            location="",
+            address="",
+        )
+
+        normalized = normalize_entry(entry)
+
+        self.assertEqual(normalized.customer_name, "")
+        self.assertEqual(normalized.raw_type_label, "Ej Disponibel")
+        self.assertEqual(normalized.shift_type, "UNAVAILABLE")
+
+    def test_raw_type_label_can_be_recovered_from_shifted_context_lines(self) -> None:
+        entry = Entry(
+            start="08:00",
+            end="11:45",
+            title="Frida Haagg Snellman",
+            location="Stadservice",
+            address="Asa Henriks Vag 16",
+        )
+
+        normalized = normalize_entry(entry)
+
+        self.assertEqual(normalized.customer_name, "Frida Haagg Snellman")
+        self.assertEqual(normalized.raw_type_label, "Stadservice")
+        self.assertEqual(normalized.shift_type, "WORK")
+
 
 if __name__ == "__main__":
     unittest.main()
