@@ -2,7 +2,8 @@ import unittest
 
 import numpy as np
 
-from ocr.paddle_adapter import OCRBox, legacy_ocr_result_to_boxes, paddle_page_to_boxes
+import ocr.paddle_adapter as paddle_adapter
+from ocr.paddle_adapter import OCRBox, create_paddle_ocr, legacy_ocr_result_to_boxes, paddle_page_to_boxes
 
 
 class PaddleAdapterConversionTests(unittest.TestCase):
@@ -25,6 +26,24 @@ class PaddleAdapterConversionTests(unittest.TestCase):
             ],
         )
 
+    def test_create_paddle_ocr_disables_mkldnn(self) -> None:
+        captured: dict[str, object] = {}
+        original = paddle_adapter.PaddleOCR
+
+        def fake_ocr(**kwargs):
+            captured.update(kwargs)
+            return {"ok": True}
+
+        try:
+            paddle_adapter.PaddleOCR = fake_ocr
+            client = create_paddle_ocr()
+        finally:
+            paddle_adapter.PaddleOCR = original
+
+        self.assertEqual(client, {"ok": True})
+        self.assertFalse(captured["enable_mkldnn"])
+        self.assertEqual(captured["device"], "cpu")
+
     def test_legacy_ocr_result_to_boxes_converts_expected_shape(self) -> None:
         records = [
             [[[10, 20], [30, 20], [30, 40], [10, 40]], ("10:00-14:00", 0.98)],
@@ -43,4 +62,3 @@ class PaddleAdapterConversionTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

@@ -204,6 +204,7 @@ If the date cannot be resolved or is inconsistent:
 - Phase 5 OCR adapter (pre-worker wiring):
   - PaddleOCR adapter implemented in `ocr/paddle_adapter.py`
   - configured models: `PP-OCRv5_mobile_det` + `PP-OCRv5_mobile_rec`
+  - OCR runtime explicitly disables MKLDNN (`enable_mkldnn=False`, `device=\"cpu\"`) to avoid known oneDNN/PIR execution errors in container CPU deployments
   - adapter contract is thin conversion only: Paddle polygon/text/score -> `Box` geometry (`x`, `y`, `w`, `h`) + confidence
   - no filtering, grouping, normalization, or semantic cleanup in adapter
   - real-screenshot golden tests added in `tests/test_ocr_golden_samples.py` with fixtures under `tests/ocr_samples/`
