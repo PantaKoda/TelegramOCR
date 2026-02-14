@@ -824,15 +824,39 @@ def _resolve_r2_key(key: str, key_prefix: str) -> str:
 
 
 def _extract_schedule_date_from_boxes(boxes: list[Any], *, default_year: int | None) -> date:
-    texts = _extract_date_candidate_texts(boxes)
-    for text in texts:
-        parsed = _parse_schedule_date_from_text(text, default_year=default_year)
-        if parsed is not None:
-            return parsed
+    options: list[dict[str, Any]] = []
+    for candidate in _extract_date_candidate_texts(boxes):
+        for parsed in _parse_schedule_date_candidates_from_text(candidate["text"], default_year=default_year):
+            options.append(
+                {
+                    "date": parsed["date"],
+                    "has_weekday": parsed["has_weekday"],
+                    "has_explicit_year": parsed["has_explicit_year"],
+                    "source_priority": candidate["source_priority"],
+                    "text_length": len(candidate["text"]),
+                    "h": candidate["h"],
+                    "y": candidate["y"],
+                }
+            )
+    if options:
+        # Prefer strong semantic date lines (weekday + month/day), then explicit
+        # year, then line-level candidates with larger header-like text geometry.
+        best = max(
+            options,
+            key=lambda item: (
+                1 if item["has_weekday"] else 0,
+                1 if item["has_explicit_year"] else 0,
+                item["source_priority"],
+                float(item["h"]),
+                item["text_length"],
+                -float(item["y"]),
+            ),
+        )
+        return best["date"]
     raise RuntimeError("Could not resolve schedule date from OCR UI text.")
 
 
-def _extract_date_candidate_texts(boxes: list[Any]) -> list[str]:
+def _extract_date_candidate_texts(boxes: list[Any]) -> list[dict[str, Any]]:
     normalized_boxes: list[dict[str, Any]] = []
     for box in boxes:
         text = str(getattr(box, "text", ""))
@@ -853,13 +877,17 @@ def _extract_date_candidate_texts(boxes: list[Any]) -> list[str]:
         return []
 
     normalized_boxes.sort(key=lambda item: (item["y"], item["x"]))
-    candidates = [item["text"] for item in normalized_boxes]
+    min_y = min(item["y"] for item in normalized_boxes)
+    max_y = max(item["y"] + item["h"] for item in normalized_boxes)
+    vertical_span = max(1.0, max_y - min_y)
+    # Date header appears in the upper viewport. Keep a generous top-band filter.
+    top_band_limit = min_y + max(400.0, vertical_span * 0.45)
 
     # Build line candidates so split OCR tokens on one date line can still be parsed.
     line_threshold = max(8.0, median(item["h"] for item in normalized_boxes) * 0.6)
     current_line: list[dict[str, Any]] = []
     current_center = 0.0
-    line_texts: list[str] = []
+    line_candidates: list[dict[str, Any]] = []
     for item in normalized_boxes:
         center = item["y"] + (item["h"] / 2.0)
         if not current_line:
@@ -870,29 +898,55 @@ def _extract_date_candidate_texts(boxes: list[Any]) -> list[str]:
             current_line.append(item)
             current_center = (current_center * (len(current_line) - 1) + center) / len(current_line)
             continue
-        line_texts.append(" ".join(part["text"] for part in sorted(current_line, key=lambda value: value["x"])))
+        line_text = " ".join(part["text"] for part in sorted(current_line, key=lambda value: value["x"]))
+        line_y = min(part["y"] for part in current_line)
+        line_h = median(part["h"] for part in current_line)
+        if line_text and line_y <= top_band_limit:
+            line_candidates.append({"text": line_text, "y": line_y, "h": line_h, "source_priority": 1})
         current_line = [item]
         current_center = center
     if current_line:
-        line_texts.append(" ".join(part["text"] for part in sorted(current_line, key=lambda value: value["x"])))
+        line_text = " ".join(part["text"] for part in sorted(current_line, key=lambda value: value["x"]))
+        line_y = min(part["y"] for part in current_line)
+        line_h = median(part["h"] for part in current_line)
+        if line_text and line_y <= top_band_limit:
+            line_candidates.append({"text": line_text, "y": line_y, "h": line_h, "source_priority": 1})
 
-    return [*line_texts, *candidates]
+    box_candidates = [
+        {"text": item["text"], "y": item["y"], "h": item["h"], "source_priority": 0}
+        for item in normalized_boxes
+        if item["y"] <= top_band_limit
+    ]
+    return [*line_candidates, *box_candidates]
 
 
-def _parse_schedule_date_from_text(text: str, *, default_year: int | None) -> date | None:
+def _parse_schedule_date_candidates_from_text(text: str, *, default_year: int | None) -> list[dict[str, Any]]:
+    candidates: list[dict[str, Any]] = []
     for match in DATE_WITH_WEEKDAY_RE.finditer(text):
         weekday_token = _normalize_date_token(match.group(1))
         if weekday_token not in WEEKDAY_NAMES:
             continue
         resolved = _build_date_from_parts(match.group(2), match.group(3), match.group(4), default_year=default_year)
         if resolved is not None:
-            return resolved
+            candidates.append(
+                {
+                    "date": resolved,
+                    "has_weekday": True,
+                    "has_explicit_year": bool(match.group(4)),
+                }
+            )
 
     for match in DATE_DAY_MONTH_RE.finditer(text):
         resolved = _build_date_from_parts(match.group(1), match.group(2), match.group(3), default_year=default_year)
         if resolved is not None:
-            return resolved
-    return None
+            candidates.append(
+                {
+                    "date": resolved,
+                    "has_weekday": False,
+                    "has_explicit_year": bool(match.group(3)),
+                }
+            )
+    return candidates
 
 
 def _build_date_from_parts(day_value: str, month_value: str, year_value: str | None, *, default_year: int | None) -> date | None:
