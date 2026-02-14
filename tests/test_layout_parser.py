@@ -281,6 +281,26 @@ class LayoutParserTests(unittest.TestCase):
         ]
         self.assert_layout(boxes, expected)
 
+    def test_stacked_times_allow_noise_line_between_start_and_end(self) -> None:
+        boxes = [
+            Box(text="08:00", x=38, y=210, w=60, h=22),
+            Box(text="Emma Gardmark • Storstadning 4h", x=118, y=210, w=320, h=24),
+            Box(text="On time", x=42, y=224, w=80, h=20),
+            Box(text="12:00", x=40, y=238, w=60, h=22),
+            Box(text="Onsala, Hacklehagsvagen 1", x=120, y=268, w=320, h=24),
+            Box(text="Collaborators +3", x=124, y=296, w=170, h=22),
+        ]
+        expected = [
+            {
+                "start": "08:00",
+                "end": "12:00",
+                "title": "Emma Gardmark • Storstadning 4h",
+                "location": "",
+                "address": "Onsala, Hacklehagsvagen 1",
+            }
+        ]
+        self.assert_layout(boxes, expected)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -119,7 +119,34 @@ class SemanticNormalizerTests(unittest.TestCase):
             self.assertEqual(value.city, baseline.city)
             self.assertEqual(value.shift_type, baseline.shift_type)
 
+    def test_title_bullet_and_duration_extracts_customer_and_job_type(self) -> None:
+        entry = Entry(
+            start="08:00",
+            end="12:00",
+            title="Emma Gårdmark • Storstädning 4h",
+            location="",
+            address="Häcklehagsvägen 1 Onsala",
+        )
+
+        normalized = normalize_entry(entry)
+
+        self.assertEqual(normalized.customer_name, "Emma Gardmark")
+        self.assertEqual(normalized.shift_type, "HOME_VISIT")
+
+    def test_trailing_job_type_without_bullet_extracts_customer(self) -> None:
+        entry = Entry(
+            start="12:00",
+            end="17:00",
+            title="Jonas Hagenfeldt Stadservice 5h",
+            location="",
+            address="Stenmursvagen 44 Kallered",
+        )
+
+        normalized = normalize_entry(entry)
+
+        self.assertEqual(normalized.customer_name, "Jonas Hagenfeldt")
+        self.assertEqual(normalized.shift_type, "HOME_VISIT")
+
 
 if __name__ == "__main__":
     unittest.main()
-

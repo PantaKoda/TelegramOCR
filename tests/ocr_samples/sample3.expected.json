@@ -1,16 +1,30 @@
 [
   {
-    "start": "11:00",
+    "start": "08:00",
     "end": "11:00",
-    "title": "on time LINDOME, Hallebovägen 15",
+    "title": "Pia Lindkvist · Städservice ① 3h",
+    "location": "",
+    "address": "LINDOME, Hallebovägen 15"
+  },
+  {
+    "start": "11:00",
+    "end": "11:40",
+    "title": "Lunch 40m",
     "location": "",
     "address": ""
   },
   {
-    "start": "17:00",
-    "end": "17:00",
-    "title": "on time Kållered, Böletvägen 13",
+    "start": "11:40",
+    "end": "12:00",
+    "title": "Restid 20m",
     "location": "",
     "address": ""
+  },
+  {
+    "start": "12:00",
+    "end": "17:00",
+    "title": "Jonas Hagenfeldt · Städservice ? 5h",
+    "location": "",
+    "address": "Kållered, Böletvägen 13"
   }
 ]

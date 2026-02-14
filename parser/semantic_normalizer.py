@@ -12,7 +12,23 @@ from parser.layout_parser import Entry
 
 POSTAL_CODE_RE = re.compile(r"\b(\d{3})\s?(\d{2})\b")
 TIME_VALUE_RE = re.compile(r"^\s*(\d{1,2})[:.](\d{2})\s*$")
+TITLE_BULLET_RE = re.compile(r"\s*[•·]\s*")
+TRAILING_DURATION_RE = re.compile(
+    r"(?:\b\d+\s*h(?:\s*\d+\s*m)?\b|\b\d+\s*m(?:in)?\b)\s*$",
+    re.IGNORECASE,
+)
 COMPANY_NOISE_TOKENS = {"ab", "hb", "stadservice", "stadtjanst", "stadning"}
+JOB_TYPE_HINT_TOKENS = {
+    "stadservice",
+    "stadning",
+    "storstadning",
+    "hemstadning",
+    "kontor",
+    "skola",
+    "vard",
+    "barn",
+    "clickandgo",
+}
 
 
 @dataclass(frozen=True)
@@ -41,9 +57,10 @@ class AddressParts:
 
 def normalize_entry(entry: Entry | dict[str, Any]) -> CanonicalShift:
     normalized = _coerce_entry(entry)
-    customer_name = _normalize_customer_name(normalized.title)
+    customer_title, job_type_hint = _split_title_components(normalized.title)
+    customer_name = _normalize_customer_name(customer_title or normalized.title)
     address = _decompose_address(normalized.address, normalized.location)
-    shift_type = _classify_shift(normalized, address)
+    shift_type = _classify_shift(normalized, address, job_type_hint=job_type_hint)
     location_key = location_fingerprint(
         street=address.street,
         street_number=address.street_number,
@@ -150,28 +167,62 @@ def _decompose_address(address_text: str, location_hint: str) -> AddressParts:
 
 
 def _normalize_customer_name(value: str) -> str:
-    normalized = _normalize_text(value)
+    normalized = _normalize_text(_strip_trailing_duration(value))
     tokens = [token for token in normalized.lower().split(" ") if token and token not in COMPANY_NOISE_TOKENS]
     if not tokens:
         tokens = [token for token in normalized.lower().split(" ") if token]
     return _to_title_case(" ".join(tokens))
 
 
-def _classify_shift(entry: Entry, address: AddressParts) -> str:
+def _classify_shift(entry: Entry, address: AddressParts, *, job_type_hint: str) -> str:
     combined = " ".join(
         [
             _normalize_text(entry.title).lower(),
             _normalize_text(entry.address).lower(),
             _normalize_text(entry.location).lower(),
+            _normalize_text(job_type_hint).lower(),
         ]
     )
     if "skola" in combined:
         return "SCHOOL"
     if "kontor" in combined:
         return "OFFICE"
+    if any(token in combined for token in ("stadservice", "stadning", "storstadning", "hemstadning", "vard av barn")):
+        return "HOME_VISIT"
     if "hem" in combined or (address.street and address.street_number):
         return "HOME_VISIT"
     return "UNKNOWN"
+
+
+def _split_title_components(value: str) -> tuple[str, str]:
+    collapsed = _collapse_whitespace(value)
+    if not collapsed:
+        return "", ""
+
+    if TITLE_BULLET_RE.search(collapsed):
+        left, right = TITLE_BULLET_RE.split(collapsed, maxsplit=1)
+        customer = _collapse_whitespace(left)
+        job_type = _collapse_whitespace(_strip_trailing_duration(right))
+        return customer, job_type
+
+    without_duration = _strip_trailing_duration(collapsed)
+    tokens = without_duration.split(" ")
+    for index, token in enumerate(tokens):
+        if index == 0:
+            continue
+        normalized = _normalize_text(token).lower()
+        if normalized in JOB_TYPE_HINT_TOKENS:
+            return _collapse_whitespace(" ".join(tokens[:index])), _collapse_whitespace(" ".join(tokens[index:]))
+    return without_duration, ""
+
+
+def _strip_trailing_duration(value: str) -> str:
+    previous = None
+    current = _collapse_whitespace(value)
+    while previous != current:
+        previous = current
+        current = TRAILING_DURATION_RE.sub("", current).strip()
+    return _collapse_whitespace(current)
 
 
 def _normalize_street(value: str) -> str:
