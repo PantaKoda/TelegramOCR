@@ -301,6 +301,26 @@ class LayoutParserTests(unittest.TestCase):
         ]
         self.assert_layout(boxes, expected)
 
+    def test_stacked_times_keep_type_line_pushed_right_of_long_customer_name(self) -> None:
+        boxes = [
+            Box(text="08:00", x=38, y=210, w=60, h=22),
+            Box(text="11:45", x=40, y=238, w=60, h=22),
+            Box(text="Frida Haagg Snellman", x=118, y=238, w=260, h=24),
+            Box(text="Stadservice", x=320, y=266, w=130, h=24),
+            Box(text="Asa Henriks Vag 16", x=120, y=296, w=220, h=24),
+            Box(text="Collaborators +2", x=124, y=324, w=170, h=22),
+        ]
+        expected = [
+            {
+                "start": "08:00",
+                "end": "11:45",
+                "title": "Frida Haagg Snellman Stadservice",
+                "location": "",
+                "address": "Asa Henriks Vag 16",
+            }
+        ]
+        self.assert_layout(boxes, expected)
+
 
 if __name__ == "__main__":
     unittest.main()

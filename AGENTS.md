@@ -202,6 +202,7 @@ If the date cannot be resolved or is inconsistent:
   - time detection via regex (`HH:MM`/`HH.MM` ranges), normalized to `HH:MM`
   - supports stacked two-line time ranges (`start` on one line, `end` on next) by consolidating single-time markers in the same left time column, including cases where status/noise lines exist between them
   - strips UI-noise tokens (e.g., collaborator/status/duration lines such as `Collaborators`, `On time`, `4h`) before title/address/location assignment
+  - when OCR pushes job/activity type to a separate trailing line, parser preserves and folds recognized type labels back into title (instead of dropping as metadata)
   - prunes far-right trailing metadata chips inside cards (e.g., collaborator counters/icons) using geometry so address/location assignment stays stable under OCR text noise
   - drops single-time cards without address/location as UI chrome/footer artifacts (e.g., status-bar clock or end-of-day thank-you rows)
   - treats single trailing metadata line as address when it matches address-like features (digits, comma, common street tokens), reducing location/address inversion

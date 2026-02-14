@@ -321,6 +321,7 @@ Behavior:
 - clusters boxes into lines
 - groups lines into cards by vertical gaps
 - extracts time/title/address/location per card
+- preserves recognized type lines pushed after long customer names by folding them into title before semantic normalization
 - ignores top UI chrome cards with no time line
 
 ## Run Once
