@@ -1,8 +1,13 @@
 import tempfile
 import unittest
 from pathlib import Path
+import sys
 
-from tools.local_backfill_runner.backfill_runner import (
+TOOLS_PROJECT = Path(__file__).resolve().parents[1] / "tools" / "local_backfill_runner"
+if str(TOOLS_PROJECT) not in sys.path:
+    sys.path.insert(0, str(TOOLS_PROJECT))
+
+from local_backfill_runner.backfill_runner import (  # noqa: E402
     BackfillStageError,
     build_image_index,
     parse_states_csv,
@@ -61,4 +66,3 @@ class LocalBackfillRunnerTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-
