@@ -179,6 +179,21 @@ class SemanticNormalizerTests(unittest.TestCase):
         self.assertEqual(normalized.raw_type_label, "Utbildning")
         self.assertEqual(normalized.shift_type, "TRAINING")
 
+    def test_leave_row_tjanstledig_del_av_dag_is_leave_type(self) -> None:
+        entry = Entry(
+            start="09:00",
+            end="12:00",
+            title="Tjänstledig del av dag",
+            location="",
+            address="",
+        )
+
+        normalized = normalize_entry(entry)
+
+        self.assertEqual(normalized.customer_name, "")
+        self.assertEqual(normalized.raw_type_label, "Tjanstledig Del Av Dag")
+        self.assertEqual(normalized.shift_type, "LEAVE")
+
     def test_activity_label_with_trailing_counter_strips_counter(self) -> None:
         entry = Entry(
             start="12:00",

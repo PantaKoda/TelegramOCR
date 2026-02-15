@@ -48,6 +48,7 @@ JOB_TYPE_HINT_TOKENS = {
     "avokade",
     "vard",
     "barn",
+    "tjanstledig",
     "clickandgo",
 }
 
@@ -79,6 +80,7 @@ ACTIVITY_LABEL_OVERRIDES = {
     "inter tid": "Inter Tid",
     "personalmote": "Personalmote",
     "vard av barn": "Vard Av Barn",
+    "tjanstledig del av dag": "Tjanstledig Del Av Dag",
     "nyckelhantering": "Nyckelhantering",
     "forberedelser till iss": "Forberedelser Till Iss",
     "ej disponibel": "Ej Disponibel",
@@ -91,6 +93,7 @@ KNOWN_TYPE_LABEL_PATTERNS: tuple[tuple[str, str], ...] = (
     ("forberedelser till iss", "Forberedelser Till Iss"),
     ("avbokade uppdrag", "Avbokade Uppdrag"),
     ("avokade uppdrag", "Avbokade Uppdrag"),
+    ("tjanstledig del av dag", "Tjanstledig Del Av Dag"),
     ("ej disponibel", "Ej Disponibel"),
     ("extra stadtillfalle", "Extra Stadtillfalle"),
     ("inledande storstadning", "Inledande Storstadning"),
@@ -346,7 +349,7 @@ def _classify_from_normalized_label(value: str) -> str:
         return SHIFT_TYPE_MEETING
     if any(token in value for token in ("nyckelhantering", "forberedelser till iss")):
         return SHIFT_TYPE_ADMIN
-    if "vard av barn" in value:
+    if any(token in value for token in ("vard av barn", "tjanstledig del av dag", "tjanstledig")):
         return SHIFT_TYPE_LEAVE
     if any(token in value for token in ("ej disponibel", "avbokade uppdrag", "avokade uppdrag")):
         return SHIFT_TYPE_UNAVAILABLE
