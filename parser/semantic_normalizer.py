@@ -88,13 +88,13 @@ ACTIVITY_LABEL_OVERRIDES = {
     "thank you for today": "Thank You For Today",
     "thank you for today!": "Thank You For Today",
     "inter tid": "Inter Tid",
-    "personalmote": "Personalmote",
-    "vard av barn": "Vard Av Barn",
-    "tjanstledig del av dag": "Tjanstledig Del Av Dag",
+    "personalmote": "Personalmöte",
+    "vard av barn": "Vård Av Barn",
+    "tjanstledig del av dag": "Tjänstledig Del Av Dag",
     "sjukdom dag 1-14": "Sjukdom Dag 1-14",
     "sjukdom dag 1 14": "Sjukdom Dag 1-14",
     "nyckelhantering": "Nyckelhantering",
-    "forberedelser till iss": "Forberedelser Till Iss",
+    "forberedelser till iss": "Förberedelser Till Iss",
     "ej disponibel": "Ej Disponibel",
     "avbokade uppdrag": "Avbokade Uppdrag",
     "avokade uppdrag": "Avbokade Uppdrag",
@@ -102,32 +102,38 @@ ACTIVITY_LABEL_OVERRIDES = {
 
 KNOWN_TYPE_LABEL_PATTERNS: tuple[tuple[str, str], ...] = (
     ("utbildning handledarhus", "Utbildning Handledarhus"),
-    ("forberedelser till iss", "Forberedelser Till Iss"),
+    ("forberedelser till iss", "Förberedelser Till Iss"),
     ("avbokade uppdrag", "Avbokade Uppdrag"),
     ("avokade uppdrag", "Avbokade Uppdrag"),
-    ("tjanstledig del av dag", "Tjanstledig Del Av Dag"),
+    ("tjanstledig del av dag", "Tjänstledig Del Av Dag"),
     ("sjukdom dag 1-14", "Sjukdom Dag 1-14"),
     ("sjukdom dag 1 14", "Sjukdom Dag 1-14"),
     ("ej disponibel", "Ej Disponibel"),
-    ("extra stadtillfalle", "Extra Stadtillfalle"),
-    ("inledande storstadning", "Inledande Storstadning"),
-    ("reklamation omstadning", "Reklamation Omstadning"),
-    ("kylskapsrengoring", "Kylskapsrengoring"),
-    ("ugnsrengoring", "Ugnsrengoring"),
+    ("extra stadtillfalle", "Extra Städtillfälle"),
+    ("inledande storstadning", "Inledande Storstädning"),
+    ("reklamation omstadning", "Reklamation Omstädning"),
+    ("kylskapsrengoring", "Kylskåpsrengöring"),
+    ("ugnsrengoring", "Ugnsrengöring"),
     ("nyckelhantering", "Nyckelhantering"),
-    ("personalmote", "Personalmote"),
+    ("personalmote", "Personalmöte"),
     ("thank you for today", "Thank You For Today"),
     ("inter tid", "Inter Tid"),
-    ("vard av barn", "Vard Av Barn"),
+    ("vard av barn", "Vård Av Barn"),
     ("clickandgo", "ClickAndGo"),
-    ("storstadning", "Storstadning"),
-    ("stadservice", "Stadservice"),
+    ("storstadning", "Storstädning"),
+    ("stadservice", "Städservice"),
     ("reklamation", "Reklamation"),
-    ("fonsterputs", "Fonsterputs"),
+    ("fonsterputs", "Fönsterputs"),
     ("utbildning", "Utbildning"),
     ("restid", "Restid"),
     ("lunch", "Lunch"),
 )
+
+PLACE_LABEL_OVERRIDES = {
+    "kallered": "Kållered",
+    "molndal": "Mölndal",
+    "goteborg": "Göteborg",
+}
 
 NON_WORK_ACTIVITY_TYPES = {
     SHIFT_TYPE_BREAK,
@@ -570,7 +576,11 @@ def _normalize_street(value: str) -> str:
 
 
 def _normalize_place(value: str) -> str:
-    return _to_title_case(_normalize_text(value))
+    normalized = _to_title_case(_normalize_text(value))
+    if not normalized:
+        return ""
+    key = _normalize_match_text(normalized).lower()
+    return PLACE_LABEL_OVERRIDES.get(key, normalized)
 
 
 def _normalize_street_number(value: str) -> str:

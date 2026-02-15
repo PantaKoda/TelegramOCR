@@ -229,7 +229,8 @@ If the date cannot be resolved or is inconsistent:
     - trailing durations (e.g., `4h`, `2h 30m`) are stripped from customer/job hints
     - trailing job-type suffixes without `•` (e.g., `Name Stadservice 5h`) are also split for cleaner customer identity
   - captures dynamic parser-observed job/activity label as `raw_type_label`
-  - canonicalizes known OCR job/activity labels to stable forms (e.g., strips trailing and inline counters/duration noise like `Lunch 1`, `Fonsterputs D`, `Reklamation 1 3h Omstadning` -> `Lunch`, `Fonsterputs`, `Reklamation Omstadning`; recognizes leave labels like `Tjanstledig Del Av Dag` and `Sjukdom Dag 1-14`)
+  - canonicalizes known OCR job/activity labels to stable forms (e.g., strips trailing and inline counters/duration noise like `Lunch 1`, `Fonsterputs D`, `Reklamation 1 3h Omstadning` -> `Lunch`, `Fönsterputs`, `Reklamation Omstädning`; recognizes leave labels like `Tjänstledig Del Av Dag` and `Sjukdom Dag 1-14`)
+  - canonicalizes known city/place ASCII OCR variants to Swedish spellings for display consistency (e.g., `Kallered` -> `Kållered`, `Molndal` -> `Mölndal`, `Goteborg` -> `Göteborg`)
   - applies bounded fuzzy matching for minor OCR typos in known type labels (e.g., `Stadservic` -> `Stadservice`) before leaving `raw_type_label` empty
   - ignores unusable OCR type hints (e.g., numeric-only `1`) and falls back to context-recovered labels from neighboring text
   - resolves split activity phrases into a single label (`Ej Disponibel` remains one `raw_type_label`, not customer + type fragments)
