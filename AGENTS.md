@@ -221,6 +221,7 @@ If the date cannot be resolved or is inconsistent:
   - deterministic semantic normalization module in `parser/semantic_normalizer.py`
   - address decomposition into `street`, `street_number`, `postal_code`, `postal_area`, `city`
   - customer/title cleanup with whitespace collapse, casing normalization, and company-noise token removal
+  - preserves OCR diacritics in human-facing payload fields (`customer_name`, address components) while keeping accent-insensitive matching for classification and fingerprints
   - title-row parsing supports `client • job_type duration` pattern:
     - customer name is extracted from the segment before `•`
     - trailing durations (e.g., `4h`, `2h 30m`) are stripped from customer/job hints
@@ -234,7 +235,7 @@ If the date cannot be resolved or is inconsistent:
   - deterministic shift classification tags: `WORK`, `TRAVEL`, `TRAINING`, `BREAK`, `MEETING`, `ADMIN`, `LEAVE`, `UNAVAILABLE`, `UNKNOWN`
   - non-client activity rows (e.g., lunch/travel/training-only boxes) keep `customer_name` empty and carry semantics via `raw_type_label` + `shift_type`
   - canonical output now includes deterministic identity keys: `location_fingerprint`, `customer_fingerprint`
-  - normalization tests in `tests/test_semantic_normalizer.py` (accent loss, missing postal code, multiline address join, OCR noise, canonical-location variants)
+  - normalization tests in `tests/test_semantic_normalizer.py` (accent-preserving output + accent-insensitive identity, missing postal code, multiline address join, OCR noise, canonical-location variants)
 - Phase 6.5 entity identity (pre-worker wiring):
   - deterministic fingerprint module in `parser/entity_identity.py`
   - `location_fingerprint` from normalized semantic location fields (`street`, `street_number`, `postal_area|city`)

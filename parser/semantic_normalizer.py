@@ -21,7 +21,16 @@ TRAILING_DURATION_RE = re.compile(
 TRAILING_COUNTER_RE = re.compile(r"(?:\s+\d+)+\s*$")
 TRAILING_PUNCT_RE = re.compile(r"^[\s\-–—:;,.!?()\[\]{}]+|[\s\-–—:;,.!?()\[\]{}]+$")
 RAW_LABEL_WORD_RE = re.compile(r"[a-z]{2,}")
-COMPANY_NOISE_TOKENS = {"ab", "hb", "stadservice", "stadtjanst", "stadning"}
+COMPANY_NOISE_TOKENS = {
+    "ab",
+    "hb",
+    "stadservice",
+    "städservice",
+    "stadtjanst",
+    "städtjanst",
+    "stadning",
+    "städning",
+}
 JOB_TYPE_HINT_TOKENS = {
     "lunch",
     "restid",
@@ -300,8 +309,12 @@ def _extract_customer_name(
     if not raw_type_label:
         return candidate
     combined_hint_label = _normalize_type_label(" ".join(token for token in (customer_title, job_type_hint) if token))
-    combined_hint_type = _classify_from_normalized_label(_normalize_text(combined_hint_label).lower()) if combined_hint_label else SHIFT_TYPE_UNKNOWN
-    has_customer_hint = bool(_normalize_text(customer_title)) and bool(_normalize_text(job_type_hint))
+    combined_hint_type = (
+        _classify_from_normalized_label(_normalize_match_text(combined_hint_label).lower())
+        if combined_hint_label
+        else SHIFT_TYPE_UNKNOWN
+    )
+    has_customer_hint = bool(_normalize_match_text(customer_title)) and bool(_normalize_match_text(job_type_hint))
     has_location_context = bool(
         address.street
         or address.street_number
@@ -322,16 +335,16 @@ def _extract_customer_name(
 
 
 def _classify_shift(entry: Entry, address: AddressParts, *, raw_type_label: str) -> str:
-    normalized_raw = _normalize_text(raw_type_label).lower()
+    normalized_raw = _normalize_match_text(raw_type_label).lower()
     classified_raw = _classify_from_normalized_label(normalized_raw)
     if classified_raw != SHIFT_TYPE_UNKNOWN:
         return classified_raw
 
     combined = " ".join(
         [
-            _normalize_text(entry.title).lower(),
-            _normalize_text(entry.address).lower(),
-            _normalize_text(entry.location).lower(),
+            _normalize_match_text(entry.title).lower(),
+            _normalize_match_text(entry.address).lower(),
+            _normalize_match_text(entry.location).lower(),
         ]
     )
     classified_combined = _classify_from_normalized_label(combined)
@@ -399,7 +412,7 @@ def _split_title_components(value: str) -> tuple[str, str]:
     for index, token in enumerate(tokens):
         if index == 0:
             continue
-        normalized = _normalize_text(token).lower()
+        normalized = _normalize_match_text(token).lower()
         if normalized in JOB_TYPE_HINT_TOKENS:
             return _collapse_whitespace(" ".join(tokens[:index])), _collapse_whitespace(" ".join(tokens[index:]))
     return without_duration, ""
@@ -408,7 +421,7 @@ def _split_title_components(value: str) -> tuple[str, str]:
 def _extract_raw_type_label(entry: Entry, *, customer_title: str, job_type_hint: str) -> str:
     combined_hint = _normalize_type_label(" ".join(token for token in (customer_title, job_type_hint) if token))
     if combined_hint:
-        combined_normalized = _normalize_text(combined_hint).lower()
+        combined_normalized = _normalize_match_text(combined_hint).lower()
         combined_classification = _classify_from_normalized_label(combined_normalized)
         if combined_normalized in ACTIVITY_LABEL_OVERRIDES:
             return ACTIVITY_LABEL_OVERRIDES[combined_normalized]
@@ -427,7 +440,7 @@ def _extract_raw_type_label(entry: Entry, *, customer_title: str, job_type_hint:
             return address_candidate
         return _extract_label_from_context_text(entry.location)
 
-    normalized = _normalize_text(title_candidate).lower()
+    normalized = _normalize_match_text(title_candidate).lower()
     if normalized in ACTIVITY_LABEL_OVERRIDES:
         return ACTIVITY_LABEL_OVERRIDES[normalized]
     if _classify_from_normalized_label(normalized) != SHIFT_TYPE_UNKNOWN:
@@ -459,12 +472,12 @@ def _canonicalize_type_label(value: str) -> str:
     cleaned = _normalize_type_label(value)
     if not cleaned:
         return ""
-    canonical = _canonical_known_label(_normalize_text(cleaned).lower())
+    canonical = _canonical_known_label(_normalize_match_text(cleaned).lower())
     return canonical or cleaned
 
 
 def _extract_label_from_context_text(value: str) -> str:
-    normalized = _normalize_text(value).lower()
+    normalized = _normalize_match_text(value).lower()
     if not normalized:
         return ""
     return _canonical_known_label(normalized)
@@ -485,7 +498,7 @@ def _canonical_known_label(normalized: str) -> str:
 
 
 def _is_usable_raw_type_label(value: str) -> bool:
-    normalized = _normalize_text(value).lower()
+    normalized = _normalize_match_text(value).lower()
     if not normalized:
         return False
     if normalized in ACTIVITY_LABEL_OVERRIDES:
@@ -591,16 +604,21 @@ def _last_number_index(tokens: list[str]) -> int | None:
     return None
 
 
-def _normalize_text(value: str) -> str:
+def _normalize_text(value: str, *, strip_accents: bool = False) -> str:
     collapsed = _collapse_whitespace(value)
     if not collapsed:
         return ""
 
     fixed = collapsed.replace("|", "l").replace("I", "i")
     fixed = _replace_ocr_digit_confusions(fixed)
-    stripped = _strip_accents(fixed)
-    alnum = re.sub(r"[^A-Za-z0-9\s\-']", " ", stripped)
-    return _collapse_whitespace(alnum)
+    if strip_accents:
+        fixed = _strip_accents(fixed)
+    sanitized = _sanitize_text_characters(fixed)
+    return _collapse_whitespace(sanitized)
+
+
+def _normalize_match_text(value: str) -> str:
+    return _normalize_text(value, strip_accents=True)
 
 
 def _replace_ocr_digit_confusions(value: str) -> str:
@@ -618,6 +636,17 @@ def _replace_ocr_digit_confusions(value: str) -> str:
 def _strip_accents(value: str) -> str:
     normalized = unicodedata.normalize("NFKD", value)
     return "".join(char for char in normalized if not unicodedata.combining(char))
+
+
+def _sanitize_text_characters(value: str) -> str:
+    normalized = unicodedata.normalize("NFKC", value)
+    chars: list[str] = []
+    for char in normalized:
+        if char.isalnum() or char in {" ", "-", "'"}:
+            chars.append(char)
+        else:
+            chars.append(" ")
+    return "".join(chars)
 
 
 def _to_title_case(value: str) -> str:
