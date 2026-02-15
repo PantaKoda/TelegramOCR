@@ -107,10 +107,11 @@ Phase 8 session aggregation capabilities:
   - time distance `<= 5` minutes (`|start_old-start_new| + |end_old-end_new|`)
 - time distance is circular over 24h to support cross-midnight shifts
 - containment fallback: merge partial observations when one time range contains the other (same identity)
+- exact-time fallback dedupe: collapse duplicates when `start/end + customer_fingerprint + shift_type + raw_type_label` match, even if one OCR observation has noisy location text
 - merge policy:
   - keep earliest start
   - keep latest end
-  - preserve location identity
+  - recompute location identity from selected merged location fields
   - prefer longer address fields
   - keep best available customer naming/fingerprint consistency
 - output: `AggregatedDaySchedule` with deduplicated `AggregatedShift` items and per-shift `source_count`
