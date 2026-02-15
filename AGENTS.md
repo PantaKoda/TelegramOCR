@@ -320,6 +320,13 @@ If the date cannot be resolved or is inconsistent:
   - runtime input mode is environment-driven (`WORKER_INPUT_MODE=fixture|ocr`) to support dev/prod switching without code changes
   - OCR adapter import is lazy in `worker/run_forever.py` and activated only when `WORKER_INPUT_MODE=ocr` (prevents fixture-mode startup failures from optional OCR runtime dependencies)
   - Docker runtime added (`Dockerfile`) with `python:3.11-slim` base, `uv sync --frozen` dependency install, and OpenCV/Paddle shared libs (`libgl1`, `libglib2.0-0`, `libgomp1`, `libsm6`, `libxext6`, `libxrender1`)
+- Local backfill/reprocess tooling:
+  - one-shot local runner implemented at `tools/local_backfill_runner/backfill_runner.py`
+  - reads session/image metadata from PostgreSQL and resolves screenshot binaries from local filesystem (no R2 download path)
+  - supports dry-run JSON output mode and optional apply mode to persist `day_snapshot`/`schedule_event`
+  - optional notification persistence in apply mode
+  - does not mutate `capture_session` lifecycle states; intended for safe reruns/backfills under strict DB transition/uniqueness constraints
+  - dedicated operational docs at `tools/local_backfill_runner/README.md`
 
 ---
 
