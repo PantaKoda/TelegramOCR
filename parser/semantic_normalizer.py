@@ -443,6 +443,7 @@ def _normalize_type_label(value: str) -> str:
     if not cleaned:
         return ""
     normalized = _normalize_text(cleaned)
+    normalized = _strip_inline_type_noise_tokens(normalized)
     return _to_title_case(normalized)
 
 
@@ -520,6 +521,17 @@ def _strip_trailing_duration(value: str) -> str:
         previous = current
         current = TRAILING_DURATION_RE.sub("", current).strip()
     return _collapse_whitespace(current)
+
+
+def _strip_inline_type_noise_tokens(value: str) -> str:
+    if not value:
+        return ""
+    # OCR may inject counters/durations in the middle of wrapped type labels:
+    # e.g. "Reklamation 1 3h omstadning" -> "Reklamation omstadning".
+    stripped = re.sub(r"\b\d+\s*h(?:\s*\d+\s*m)?\b", " ", value, flags=re.IGNORECASE)
+    stripped = re.sub(r"\b\d+\s*m(?:in)?\b", " ", stripped, flags=re.IGNORECASE)
+    stripped = re.sub(r"\b\d+\b", " ", stripped)
+    return _collapse_whitespace(stripped)
 
 
 def _normalize_street(value: str) -> str:

@@ -224,6 +224,21 @@ class SemanticNormalizerTests(unittest.TestCase):
         self.assertEqual(normalized.raw_type_label, "Ej Disponibel")
         self.assertEqual(normalized.shift_type, "UNAVAILABLE")
 
+    def test_wrapped_reklamation_omstadning_with_inline_duration_keeps_full_type(self) -> None:
+        entry = Entry(
+            start="13:30",
+            end="16:30",
+            title="Maria Bjarsmyr · Reklamation/ ① 3h omstadning",
+            location="",
+            address="Kungsbacka Halgardsvagen 10",
+        )
+
+        normalized = normalize_entry(entry)
+
+        self.assertEqual(normalized.customer_name, "Maria Bjarsmyr")
+        self.assertEqual(normalized.raw_type_label, "Reklamation Omstadning")
+        self.assertEqual(normalized.shift_type, "WORK")
+
     def test_raw_type_label_can_be_recovered_from_shifted_context_lines(self) -> None:
         entry = Entry(
             start="08:00",
