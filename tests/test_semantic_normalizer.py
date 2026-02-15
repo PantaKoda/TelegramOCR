@@ -24,8 +24,9 @@ class SemanticNormalizerTests(unittest.TestCase):
         normalized_a = normalize_entry(with_accent)
         normalized_b = normalize_entry(without_accent)
 
-        self.assertEqual(normalized_a.city, "Molndal")
-        self.assertEqual(normalized_a.city, normalized_b.city)
+        self.assertEqual(normalized_a.city, "Mölndal")
+        self.assertEqual(normalized_b.city, "Molndal")
+        self.assertEqual(normalized_a.location_fingerprint, normalized_b.location_fingerprint)
         self.assertEqual(normalized_a.customer_name, "Pia Lindkvist")
         self.assertEqual(normalized_b.customer_name, "Pia Lindkvist")
 
@@ -40,7 +41,7 @@ class SemanticNormalizerTests(unittest.TestCase):
 
         normalized = normalize_entry(entry)
 
-        self.assertEqual(normalized.street, "Valebergsvagen")
+        self.assertEqual(normalized.street, "Valebergsvägen")
         self.assertEqual(normalized.street_number, "316")
         self.assertEqual(normalized.postal_code, "")
         self.assertEqual(normalized.city, "Billdal")
@@ -59,7 +60,7 @@ class SemanticNormalizerTests(unittest.TestCase):
 
         self.assertEqual(normalized.street, "Storgatan")
         self.assertEqual(normalized.street_number, "12A")
-        self.assertEqual(normalized.city, "Goteborg")
+        self.assertEqual(normalized.city, "Göteborg")
 
     def test_noisy_ocr_l_vs_i_is_normalized(self) -> None:
         clean = Entry(
@@ -115,9 +116,8 @@ class SemanticNormalizerTests(unittest.TestCase):
             self.assertEqual(value.street, baseline.street)
             self.assertEqual(value.street_number, baseline.street_number)
             self.assertEqual(value.postal_code, baseline.postal_code)
-            self.assertEqual(value.postal_area, baseline.postal_area)
-            self.assertEqual(value.city, baseline.city)
             self.assertEqual(value.shift_type, baseline.shift_type)
+            self.assertEqual(value.location_fingerprint, baseline.location_fingerprint)
 
     def test_title_bullet_and_duration_extracts_customer_and_job_type(self) -> None:
         entry = Entry(
@@ -130,7 +130,7 @@ class SemanticNormalizerTests(unittest.TestCase):
 
         normalized = normalize_entry(entry)
 
-        self.assertEqual(normalized.customer_name, "Emma Gardmark")
+        self.assertEqual(normalized.customer_name, "Emma Gårdmark")
         self.assertEqual(normalized.shift_type, "WORK")
         self.assertEqual(normalized.raw_type_label, "Storstadning")
 
