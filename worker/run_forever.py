@@ -151,6 +151,7 @@ class WorkerRuntimeConfig:
     fixture_payload_path: str
     summary_threshold: int
     input_mode: str
+    ocr_lang: str
     ocr_default_year: int | None
     r2_config: "R2Config | None"
     idle_log_every: int = 12
@@ -194,6 +195,7 @@ def load_runtime_config() -> WorkerRuntimeConfig:
     summary_threshold = _parse_positive_int_env("NOTIFICATION_SUMMARY_THRESHOLD", 3)
     idle_log_every = _parse_positive_int_env("WORKER_IDLE_LOG_EVERY", 12)
     input_mode = _parse_input_mode(os.getenv("WORKER_INPUT_MODE", INPUT_MODE_FIXTURE))
+    ocr_lang = _parse_non_empty_env("OCR_LANG", "sv")
     ocr_default_year = _parse_optional_int_env("OCR_DEFAULT_YEAR")
     if input_mode == INPUT_MODE_OCR and ocr_default_year is None:
         ocr_default_year = datetime.now(timezone.utc).year
@@ -206,6 +208,7 @@ def load_runtime_config() -> WorkerRuntimeConfig:
         fixture_payload_path=os.getenv("FIXTURE_PAYLOAD_PATH", DEFAULT_FIXTURE_PAYLOAD_PATH),
         summary_threshold=summary_threshold,
         input_mode=input_mode,
+        ocr_lang=ocr_lang,
         ocr_default_year=ocr_default_year,
         r2_config=r2_config,
         idle_log_every=idle_log_every,
@@ -312,7 +315,7 @@ def run_iteration(
                 raise WorkerStageError("ocr", "Failed importing PaddleOCR adapter dependencies.", cause=error) from error
             if ocr_client is None:
                 try:
-                    ocr_client = create_paddle_ocr()
+                    ocr_client = create_paddle_ocr(lang=config.ocr_lang)
                 except Exception as error:
                     raise WorkerStageError("ocr", "Failed creating PaddleOCR client.", cause=error) from error
             if r2_client is None:
@@ -632,6 +635,7 @@ def run_forever() -> None:
             "idle_timeout_seconds": lifecycle_config.idle_timeout_seconds,
             "idle_log_every": config.idle_log_every,
             "input_mode": config.input_mode,
+            "ocr_lang": config.ocr_lang,
             "ocr_default_year": config.ocr_default_year,
             "open_state": lifecycle_config.open_state,
             "processing_state": lifecycle_config.processing_state,
@@ -784,6 +788,16 @@ def _parse_optional_int_env(name: str) -> int | None:
         return int(value)
     except ValueError as error:
         raise RuntimeError(f"{name} must be an integer.") from error
+
+
+def _parse_non_empty_env(name: str, default: str) -> str:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    parsed = value.strip()
+    if not parsed:
+        raise RuntimeError(f"{name} must be a non-empty value.")
+    return parsed
 
 
 def _parse_input_mode(value: str) -> str:

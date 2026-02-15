@@ -188,6 +188,7 @@ If the date cannot be resolved or is inconsistent:
   - serializes per `(user_id, schedule_date)` writes with transactional advisory lock
   - insert path uses `ON CONFLICT ... DO NOTHING RETURNING` to classify created vs existing row
   - `fixture` mode requires fixture payload field `schedule_date` (ISO date string)
+  - OCR recognition language is environment-configurable via `OCR_LANG` (default: `sv`)
   - `ocr` mode resolves `schedule_date` from OCR UI date text (uses `OCR_DEFAULT_YEAR` when provided; otherwise defaults missing-year dates to current UTC year)
   - session-level date inheritance: if some images in a multi-image session miss a visible date header, they inherit the explicit date detected from another image in the same ordered session; conflicting explicit dates across images fail the session
   - date extraction ranking prefers strong header candidates (weekday-bearing lines, line-level grouped text, larger header geometry) over weaker calendar-strip day/month matches to reduce wrong-date false positives
@@ -213,6 +214,7 @@ If the date cannot be resolved or is inconsistent:
 - Phase 5 OCR adapter (pre-worker wiring):
   - PaddleOCR adapter implemented in `ocr/paddle_adapter.py`
   - configured models: `PP-OCRv5_mobile_det` + `PP-OCRv5_mobile_rec`
+  - OCR recognition language passed to Paddle via adapter parameter (`lang`), wired from runtime env `OCR_LANG` (default: `sv`)
   - OCR runtime explicitly disables MKLDNN (`enable_mkldnn=False`, `device=\"cpu\"`) to avoid known oneDNN/PIR execution errors in container CPU deployments
   - adapter contract is thin conversion only: Paddle polygon/text/score -> `Box` geometry (`x`, `y`, `w`, `h`) + confidence
   - no filtering, grouping, normalization, or semantic cleanup in adapter

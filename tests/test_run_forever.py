@@ -44,6 +44,7 @@ class RunForeverConfigTests(unittest.TestCase):
         self.assertEqual(config.summary_threshold, 3)
         self.assertEqual(config.idle_log_every, 12)
         self.assertEqual(config.input_mode, "fixture")
+        self.assertEqual(config.ocr_lang, "sv")
         self.assertIsNone(config.ocr_default_year)
         self.assertIsNone(config.r2_config)
         self.assertEqual(config.fixture_payload_path, "fixtures/sample_schedule.json")
@@ -56,6 +57,7 @@ class RunForeverConfigTests(unittest.TestCase):
             "NOTIFICATION_SUMMARY_THRESHOLD": "5",
             "WORKER_IDLE_LOG_EVERY": "4",
             "FIXTURE_PAYLOAD_PATH": "/tmp/fixture.json",
+            "OCR_LANG": "en",
         }
         with patch.dict(os.environ, env, clear=True):
             config = load_runtime_config()
@@ -64,6 +66,7 @@ class RunForeverConfigTests(unittest.TestCase):
         self.assertEqual(config.summary_threshold, 5)
         self.assertEqual(config.idle_log_every, 4)
         self.assertEqual(config.input_mode, "fixture")
+        self.assertEqual(config.ocr_lang, "en")
         self.assertEqual(config.fixture_payload_path, "/tmp/fixture.json")
 
     def test_load_runtime_config_parses_ocr_mode_and_r2(self) -> None:
@@ -138,6 +141,15 @@ class RunForeverConfigTests(unittest.TestCase):
         }
         with patch.dict(os.environ, env, clear=True):
             with self.assertRaisesRegex(RuntimeError, "WORKER_INPUT_MODE"):
+                load_runtime_config()
+
+    def test_load_runtime_config_rejects_empty_ocr_lang(self) -> None:
+        env = {
+            "DATABASE_URL": "postgresql://user:pass@localhost:5432/db",
+            "OCR_LANG": "   ",
+        }
+        with patch.dict(os.environ, env, clear=True):
+            with self.assertRaisesRegex(RuntimeError, "OCR_LANG"):
                 load_runtime_config()
 
 
@@ -424,6 +436,7 @@ class RunForeverIterationIntegrationTests(unittest.TestCase):
             fixture_payload_path=self.fixture_file.name,
             summary_threshold=3,
             input_mode="fixture",
+            ocr_lang="sv",
             ocr_default_year=None,
             r2_config=None,
         )
