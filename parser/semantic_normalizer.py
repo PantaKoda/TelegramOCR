@@ -49,6 +49,7 @@ JOB_TYPE_HINT_TOKENS = {
     "vard",
     "barn",
     "tjanstledig",
+    "sjukdom",
     "clickandgo",
 }
 
@@ -81,6 +82,8 @@ ACTIVITY_LABEL_OVERRIDES = {
     "personalmote": "Personalmote",
     "vard av barn": "Vard Av Barn",
     "tjanstledig del av dag": "Tjanstledig Del Av Dag",
+    "sjukdom dag 1-14": "Sjukdom Dag 1-14",
+    "sjukdom dag 1 14": "Sjukdom Dag 1-14",
     "nyckelhantering": "Nyckelhantering",
     "forberedelser till iss": "Forberedelser Till Iss",
     "ej disponibel": "Ej Disponibel",
@@ -94,6 +97,8 @@ KNOWN_TYPE_LABEL_PATTERNS: tuple[tuple[str, str], ...] = (
     ("avbokade uppdrag", "Avbokade Uppdrag"),
     ("avokade uppdrag", "Avbokade Uppdrag"),
     ("tjanstledig del av dag", "Tjanstledig Del Av Dag"),
+    ("sjukdom dag 1-14", "Sjukdom Dag 1-14"),
+    ("sjukdom dag 1 14", "Sjukdom Dag 1-14"),
     ("ej disponibel", "Ej Disponibel"),
     ("extra stadtillfalle", "Extra Stadtillfalle"),
     ("inledande storstadning", "Inledande Storstadning"),
@@ -349,7 +354,7 @@ def _classify_from_normalized_label(value: str) -> str:
         return SHIFT_TYPE_MEETING
     if any(token in value for token in ("nyckelhantering", "forberedelser till iss")):
         return SHIFT_TYPE_ADMIN
-    if any(token in value for token in ("vard av barn", "tjanstledig del av dag", "tjanstledig")):
+    if any(token in value for token in ("vard av barn", "tjanstledig del av dag", "tjanstledig", "sjukdom dag 1-14", "sjukdom")):
         return SHIFT_TYPE_LEAVE
     if any(token in value for token in ("ej disponibel", "avbokade uppdrag", "avokade uppdrag")):
         return SHIFT_TYPE_UNAVAILABLE
@@ -529,11 +534,21 @@ def _strip_trailing_duration(value: str) -> str:
 def _strip_inline_type_noise_tokens(value: str) -> str:
     if not value:
         return ""
+    preserved_ranges: dict[str, str] = {}
+
+    def preserve_range(match: re.Match[str]) -> str:
+        key = f"__RANGE_{len(preserved_ranges)}__"
+        preserved_ranges[key] = _collapse_whitespace(match.group(0))
+        return key
+
+    protected = re.sub(r"\b\d+\s*-\s*\d+\b", preserve_range, value)
     # OCR may inject counters/durations in the middle of wrapped type labels:
     # e.g. "Reklamation 1 3h omstadning" -> "Reklamation omstadning".
-    stripped = re.sub(r"\b\d+\s*h(?:\s*\d+\s*m)?\b", " ", value, flags=re.IGNORECASE)
+    stripped = re.sub(r"\b\d+\s*h(?:\s*\d+\s*m)?\b", " ", protected, flags=re.IGNORECASE)
     stripped = re.sub(r"\b\d+\s*m(?:in)?\b", " ", stripped, flags=re.IGNORECASE)
     stripped = re.sub(r"\b\d+\b", " ", stripped)
+    for key, original in preserved_ranges.items():
+        stripped = stripped.replace(key, original)
     return _collapse_whitespace(stripped)
 
 
