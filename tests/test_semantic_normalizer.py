@@ -284,6 +284,21 @@ class SemanticNormalizerTests(unittest.TestCase):
         self.assertEqual(normalized.raw_type_label, "Stadservice")
         self.assertEqual(normalized.shift_type, "WORK")
 
+    def test_isolated_numeric_separator_between_name_tokens_is_removed(self) -> None:
+        entry = Entry(
+            start="08:00",
+            end="12:00",
+            title="Maryann 1 Sarisson Stadservice",
+            location="",
+            address="Lindome Hallevovagen 15",
+        )
+
+        normalized = normalize_entry(entry)
+
+        self.assertEqual(normalized.customer_name, "Maryann Sarisson")
+        self.assertEqual(normalized.raw_type_label, "Stadservice")
+        self.assertEqual(normalized.shift_type, "WORK")
+
     def test_fuzzy_work_type_label_is_canonicalized(self) -> None:
         entry = Entry(
             start="08:00",

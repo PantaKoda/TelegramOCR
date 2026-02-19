@@ -276,10 +276,31 @@ def _decompose_address(address_text: str, location_hint: str) -> AddressParts:
 
 def _normalize_customer_name(value: str) -> str:
     normalized = _normalize_text(_strip_trailing_duration(value))
-    tokens = [token for token in normalized.lower().split(" ") if token and token not in COMPANY_NOISE_TOKENS]
+    raw_tokens = [token for token in normalized.lower().split(" ") if token]
+    cleaned_tokens = _drop_isolated_numeric_separator_tokens(raw_tokens)
+    tokens = [token for token in cleaned_tokens if token and token not in COMPANY_NOISE_TOKENS]
     if not tokens:
-        tokens = [token for token in normalized.lower().split(" ") if token]
+        tokens = cleaned_tokens
     return _to_title_case(" ".join(tokens))
+
+
+def _drop_isolated_numeric_separator_tokens(tokens: list[str]) -> list[str]:
+    if len(tokens) < 3:
+        return tokens
+
+    cleaned: list[str] = []
+    for index, token in enumerate(tokens):
+        if token.isdigit() and len(token) <= 2:
+            previous = tokens[index - 1] if index > 0 else ""
+            following = tokens[index + 1] if index + 1 < len(tokens) else ""
+            if _contains_alpha(previous) and _contains_alpha(following):
+                continue
+        cleaned.append(token)
+    return cleaned
+
+
+def _contains_alpha(value: str) -> bool:
+    return any(char.isalpha() for char in value)
 
 
 def _extract_customer_name(

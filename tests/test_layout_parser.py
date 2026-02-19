@@ -397,6 +397,24 @@ class LayoutParserTests(unittest.TestCase):
         ]
         self.assert_layout(boxes, expected)
 
+    def test_address_line_with_trailing_collaborators_suffix_is_preserved(self) -> None:
+        boxes = [
+            Box(text="08:00", x=38, y=210, w=60, h=22),
+            Box(text="09:20", x=40, y=238, w=60, h=22),
+            Box(text="Catarina Berne Bjornhede Stadservice", x=118, y=238, w=360, h=24),
+            Box(text="KULLAVIK, Sjostigen 8 Collaborators +3", x=120, y=268, w=380, h=24),
+        ]
+        expected = [
+            {
+                "start": "08:00",
+                "end": "09:20",
+                "title": "Catarina Berne Bjornhede Stadservice",
+                "location": "",
+                "address": "KULLAVIK, Sjostigen 8",
+            }
+        ]
+        self.assert_layout(boxes, expected)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -13,6 +13,7 @@ TIME_RANGE_RE = re.compile(r"\b(\d{1,2})[:.](\d{2})(?:\s*-\s*(\d{1,2})[:.](\d{2}
 LEADING_SINGLE_TIME_RE = re.compile(r"^\s*(\d{1,2})[:.](\d{2})(?:\s+(.*\S))?\s*$")
 DURATION_RE = re.compile(r"^\s*\d+\s*h(?:\s*\d+\s*m)?\s*$|^\s*\d+\s*m(?:in)?\s*$", re.IGNORECASE)
 NOISE_PREFIX_RE = re.compile(r"^(?:on\s*time|collaborators?(?:\s*\+?\d+)?)\b[:\-]?\s*", re.IGNORECASE)
+NOISE_SUFFIX_RE = re.compile(r"\s+(?:collaborators?(?:\s*\+?\d+)?)\b.*$", re.IGNORECASE)
 TYPE_LABEL_HINTS = (
     "stadservice",
     "stadning",
@@ -685,4 +686,5 @@ def _strip_noise_prefix(value: str) -> str:
     while previous != current:
         previous = current
         current = NOISE_PREFIX_RE.sub("", current).strip()
+        current = NOISE_SUFFIX_RE.sub("", current).strip()
     return _clean_text(current)
