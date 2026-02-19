@@ -25,11 +25,15 @@ def ensure_paddle_available() -> None:
         raise RuntimeError("Missing dependency `paddleocr`. Run `uv sync` (or `uv add paddleocr paddlepaddle`).")
 
 
-def create_paddle_ocr() -> Any:
+def create_paddle_ocr(*, lang: str = "sv") -> Any:
     ensure_paddle_available()
+    normalized_lang = (lang or "").strip()
+    if not normalized_lang:
+        raise RuntimeError("OCR language must be a non-empty value.")
     return PaddleOCR(
         text_detection_model_name="PP-OCRv5_mobile_det",
         text_recognition_model_name="PP-OCRv5_mobile_rec",
+        lang=normalized_lang,
         # Keep CPU inference on Paddle runtime path; oneDNN has shown
         # unsupported PIR attribute conversions in container deployments.
         enable_mkldnn=False,

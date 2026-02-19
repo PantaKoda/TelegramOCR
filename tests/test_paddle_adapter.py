@@ -43,6 +43,23 @@ class PaddleAdapterConversionTests(unittest.TestCase):
         self.assertEqual(client, {"ok": True})
         self.assertFalse(captured["enable_mkldnn"])
         self.assertEqual(captured["device"], "cpu")
+        self.assertEqual(captured["lang"], "sv")
+
+    def test_create_paddle_ocr_allows_lang_override(self) -> None:
+        captured: dict[str, object] = {}
+        original = paddle_adapter.PaddleOCR
+
+        def fake_ocr(**kwargs):
+            captured.update(kwargs)
+            return {"ok": True}
+
+        try:
+            paddle_adapter.PaddleOCR = fake_ocr
+            _ = create_paddle_ocr(lang="en")
+        finally:
+            paddle_adapter.PaddleOCR = original
+
+        self.assertEqual(captured["lang"], "en")
 
     def test_legacy_ocr_result_to_boxes_converts_expected_shape(self) -> None:
         records = [

@@ -188,6 +188,7 @@ If the date cannot be resolved or is inconsistent:
   - serializes per `(user_id, schedule_date)` writes with transactional advisory lock
   - insert path uses `ON CONFLICT ... DO NOTHING RETURNING` to classify created vs existing row
   - `fixture` mode requires fixture payload field `schedule_date` (ISO date string)
+  - OCR recognition language is environment-configurable via `OCR_LANG` (default: `sv`)
   - `ocr` mode resolves `schedule_date` from OCR UI date text (uses `OCR_DEFAULT_YEAR` when provided; otherwise defaults missing-year dates to current UTC year)
   - session-level date inheritance: if some images in a multi-image session miss a visible date header, they inherit the explicit date detected from another image in the same ordered session; conflicting explicit dates across images fail the session
   - date extraction ranking prefers strong header candidates (weekday-bearing lines, line-level grouped text, larger header geometry) over weaker calendar-strip day/month matches to reduce wrong-date false positives
@@ -214,6 +215,7 @@ If the date cannot be resolved or is inconsistent:
 - Phase 5 OCR adapter (pre-worker wiring):
   - PaddleOCR adapter implemented in `ocr/paddle_adapter.py`
   - configured models: `PP-OCRv5_mobile_det` + `PP-OCRv5_mobile_rec`
+  - OCR recognition language passed to Paddle via adapter parameter (`lang`), wired from runtime env `OCR_LANG` (default: `sv`)
   - OCR runtime explicitly disables MKLDNN (`enable_mkldnn=False`, `device=\"cpu\"`) to avoid known oneDNN/PIR execution errors in container CPU deployments
   - adapter contract is thin conversion only: Paddle polygon/text/score -> `Box` geometry (`x`, `y`, `w`, `h`) + confidence
   - no filtering, grouping, normalization, or semantic cleanup in adapter
@@ -222,13 +224,15 @@ If the date cannot be resolved or is inconsistent:
   - deterministic semantic normalization module in `parser/semantic_normalizer.py`
   - address decomposition into `street`, `street_number`, `postal_code`, `postal_area`, `city`
   - customer/title cleanup with whitespace collapse, casing normalization, and company-noise token removal
+  - preserves OCR diacritics in human-facing payload fields (`customer_name`, address components) while keeping accent-insensitive matching for classification and fingerprints
   - customer-name cleanup removes isolated numeric separator artifacts between alphabetic name tokens (e.g., `Maryann 1 Sarisson` -> `Maryann Sarisson`)
   - title-row parsing supports `client • job_type duration` pattern:
     - customer name is extracted from the segment before `•`
     - trailing durations (e.g., `4h`, `2h 30m`) are stripped from customer/job hints
     - trailing job-type suffixes without `•` (e.g., `Name Stadservice 5h`) are also split for cleaner customer identity
   - captures dynamic parser-observed job/activity label as `raw_type_label`
-  - canonicalizes known OCR job/activity labels to stable forms (e.g., strips trailing and inline counters/duration noise like `Lunch 1`, `Fonsterputs D`, `Reklamation 1 3h Omstadning` -> `Lunch`, `Fonsterputs`, `Reklamation Omstadning`; recognizes leave labels like `Tjanstledig Del Av Dag`)
+  - canonicalizes known OCR job/activity labels to stable forms (e.g., strips trailing and inline counters/duration noise like `Lunch 1`, `Fonsterputs D`, `Reklamation 1 3h Omstadning` -> `Lunch`, `Fönsterputs`, `Reklamation Omstädning`; recognizes leave labels like `Tjänstledig Del Av Dag` and `Sjukdom Dag 1-14`)
+  - canonicalizes known city/place ASCII OCR variants to Swedish spellings for display consistency (e.g., `Kallered` -> `Kållered`, `Molndal` -> `Mölndal`, `Goteborg` -> `Göteborg`)
   - applies bounded fuzzy matching for minor OCR typos in known type labels (e.g., `Stadservic` -> `Stadservice`) before leaving `raw_type_label` empty
   - ignores unusable OCR type hints (e.g., numeric-only `1`) and falls back to context-recovered labels from neighboring text
   - resolves split activity phrases into a single label (`Ej Disponibel` remains one `raw_type_label`, not customer + type fragments)
@@ -236,7 +240,7 @@ If the date cannot be resolved or is inconsistent:
   - deterministic shift classification tags: `WORK`, `TRAVEL`, `TRAINING`, `BREAK`, `MEETING`, `ADMIN`, `LEAVE`, `UNAVAILABLE`, `UNKNOWN`
   - non-client activity rows (e.g., lunch/travel/training-only boxes) keep `customer_name` empty and carry semantics via `raw_type_label` + `shift_type`
   - canonical output now includes deterministic identity keys: `location_fingerprint`, `customer_fingerprint`
-  - normalization tests in `tests/test_semantic_normalizer.py` (accent loss, missing postal code, multiline address join, OCR noise, canonical-location variants)
+  - normalization tests in `tests/test_semantic_normalizer.py` (accent-preserving output + accent-insensitive identity, missing postal code, multiline address join, OCR noise, canonical-location variants)
 - Phase 6.5 entity identity (pre-worker wiring):
   - deterministic fingerprint module in `parser/entity_identity.py`
   - `location_fingerprint` from normalized semantic location fields (`street`, `street_number`, `postal_area|city`)

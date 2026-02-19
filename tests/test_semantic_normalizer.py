@@ -24,8 +24,9 @@ class SemanticNormalizerTests(unittest.TestCase):
         normalized_a = normalize_entry(with_accent)
         normalized_b = normalize_entry(without_accent)
 
-        self.assertEqual(normalized_a.city, "Molndal")
-        self.assertEqual(normalized_a.city, normalized_b.city)
+        self.assertEqual(normalized_a.city, "Mölndal")
+        self.assertEqual(normalized_b.city, "Mölndal")
+        self.assertEqual(normalized_a.location_fingerprint, normalized_b.location_fingerprint)
         self.assertEqual(normalized_a.customer_name, "Pia Lindkvist")
         self.assertEqual(normalized_b.customer_name, "Pia Lindkvist")
 
@@ -40,7 +41,7 @@ class SemanticNormalizerTests(unittest.TestCase):
 
         normalized = normalize_entry(entry)
 
-        self.assertEqual(normalized.street, "Valebergsvagen")
+        self.assertEqual(normalized.street, "Valebergsvägen")
         self.assertEqual(normalized.street_number, "316")
         self.assertEqual(normalized.postal_code, "")
         self.assertEqual(normalized.city, "Billdal")
@@ -59,7 +60,7 @@ class SemanticNormalizerTests(unittest.TestCase):
 
         self.assertEqual(normalized.street, "Storgatan")
         self.assertEqual(normalized.street_number, "12A")
-        self.assertEqual(normalized.city, "Goteborg")
+        self.assertEqual(normalized.city, "Göteborg")
 
     def test_noisy_ocr_l_vs_i_is_normalized(self) -> None:
         clean = Entry(
@@ -115,9 +116,8 @@ class SemanticNormalizerTests(unittest.TestCase):
             self.assertEqual(value.street, baseline.street)
             self.assertEqual(value.street_number, baseline.street_number)
             self.assertEqual(value.postal_code, baseline.postal_code)
-            self.assertEqual(value.postal_area, baseline.postal_area)
-            self.assertEqual(value.city, baseline.city)
             self.assertEqual(value.shift_type, baseline.shift_type)
+            self.assertEqual(value.location_fingerprint, baseline.location_fingerprint)
 
     def test_title_bullet_and_duration_extracts_customer_and_job_type(self) -> None:
         entry = Entry(
@@ -130,9 +130,9 @@ class SemanticNormalizerTests(unittest.TestCase):
 
         normalized = normalize_entry(entry)
 
-        self.assertEqual(normalized.customer_name, "Emma Gardmark")
+        self.assertEqual(normalized.customer_name, "Emma Gårdmark")
         self.assertEqual(normalized.shift_type, "WORK")
-        self.assertEqual(normalized.raw_type_label, "Storstadning")
+        self.assertEqual(normalized.raw_type_label, "Storstädning")
 
     def test_trailing_job_type_without_bullet_extracts_customer(self) -> None:
         entry = Entry(
@@ -147,7 +147,7 @@ class SemanticNormalizerTests(unittest.TestCase):
 
         self.assertEqual(normalized.customer_name, "Jonas Hagenfeldt")
         self.assertEqual(normalized.shift_type, "WORK")
-        self.assertEqual(normalized.raw_type_label, "Stadservice")
+        self.assertEqual(normalized.raw_type_label, "Städservice")
 
     def test_activity_row_populates_raw_type_and_not_customer(self) -> None:
         entry = Entry(
@@ -191,7 +191,22 @@ class SemanticNormalizerTests(unittest.TestCase):
         normalized = normalize_entry(entry)
 
         self.assertEqual(normalized.customer_name, "")
-        self.assertEqual(normalized.raw_type_label, "Tjanstledig Del Av Dag")
+        self.assertEqual(normalized.raw_type_label, "Tjänstledig Del Av Dag")
+        self.assertEqual(normalized.shift_type, "LEAVE")
+
+    def test_leave_row_sjukdom_dag_1_14_is_leave_type(self) -> None:
+        entry = Entry(
+            start="09:00",
+            end="17:00",
+            title="Sjukdom dag 1-14",
+            location="",
+            address="",
+        )
+
+        normalized = normalize_entry(entry)
+
+        self.assertEqual(normalized.customer_name, "")
+        self.assertEqual(normalized.raw_type_label, "Sjukdom Dag 1-14")
         self.assertEqual(normalized.shift_type, "LEAVE")
 
     def test_activity_label_with_trailing_counter_strips_counter(self) -> None:
@@ -221,7 +236,7 @@ class SemanticNormalizerTests(unittest.TestCase):
         normalized = normalize_entry(entry)
 
         self.assertEqual(normalized.customer_name, "Lena Falk")
-        self.assertEqual(normalized.raw_type_label, "Fonsterputs")
+        self.assertEqual(normalized.raw_type_label, "Fönsterputs")
         self.assertEqual(normalized.shift_type, "WORK")
 
     def test_split_unavailable_label_rejoins_and_clears_customer_name(self) -> None:
@@ -251,7 +266,7 @@ class SemanticNormalizerTests(unittest.TestCase):
         normalized = normalize_entry(entry)
 
         self.assertEqual(normalized.customer_name, "Maria Bjarsmyr")
-        self.assertEqual(normalized.raw_type_label, "Reklamation Omstadning")
+        self.assertEqual(normalized.raw_type_label, "Reklamation Omstädning")
         self.assertEqual(normalized.shift_type, "WORK")
 
     def test_raw_type_label_can_be_recovered_from_shifted_context_lines(self) -> None:
@@ -266,7 +281,7 @@ class SemanticNormalizerTests(unittest.TestCase):
         normalized = normalize_entry(entry)
 
         self.assertEqual(normalized.customer_name, "Frida Haagg Snellman")
-        self.assertEqual(normalized.raw_type_label, "Stadservice")
+        self.assertEqual(normalized.raw_type_label, "Städservice")
         self.assertEqual(normalized.shift_type, "WORK")
 
     def test_numeric_job_type_hint_falls_back_to_context_label(self) -> None:
@@ -281,7 +296,7 @@ class SemanticNormalizerTests(unittest.TestCase):
         normalized = normalize_entry(entry)
 
         self.assertEqual(normalized.customer_name, "Mattias Rondolph")
-        self.assertEqual(normalized.raw_type_label, "Stadservice")
+        self.assertEqual(normalized.raw_type_label, "Städservice")
         self.assertEqual(normalized.shift_type, "WORK")
 
     def test_isolated_numeric_separator_between_name_tokens_is_removed(self) -> None:
@@ -296,7 +311,7 @@ class SemanticNormalizerTests(unittest.TestCase):
         normalized = normalize_entry(entry)
 
         self.assertEqual(normalized.customer_name, "Maryann Sarisson")
-        self.assertEqual(normalized.raw_type_label, "Stadservice")
+        self.assertEqual(normalized.raw_type_label, "Städservice")
         self.assertEqual(normalized.shift_type, "WORK")
 
     def test_fuzzy_work_type_label_is_canonicalized(self) -> None:
@@ -311,7 +326,7 @@ class SemanticNormalizerTests(unittest.TestCase):
         normalized = normalize_entry(entry)
 
         self.assertEqual(normalized.customer_name, "Frida Haagg Snellman")
-        self.assertEqual(normalized.raw_type_label, "Stadservice")
+        self.assertEqual(normalized.raw_type_label, "Städservice")
         self.assertEqual(normalized.shift_type, "WORK")
 
     def test_noisy_duration_token_still_extracts_clickandgo_type(self) -> None:
@@ -328,6 +343,19 @@ class SemanticNormalizerTests(unittest.TestCase):
         self.assertEqual(normalized.customer_name, "Frida Haagg Snellman")
         self.assertEqual(normalized.raw_type_label, "ClickAndGo")
         self.assertEqual(normalized.shift_type, "WORK")
+
+    def test_city_ascii_variant_is_canonicalized_to_swedish_spelling(self) -> None:
+        entry = Entry(
+            start="12:00",
+            end="17:00",
+            title="Jonas Hagenfeldt Stadservice 5h",
+            location="KALLERED",
+            address="Böletvägen 13",
+        )
+
+        normalized = normalize_entry(entry)
+
+        self.assertEqual(normalized.city, "Kållered")
 
 
 if __name__ == "__main__":

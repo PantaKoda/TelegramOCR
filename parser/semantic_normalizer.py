@@ -21,7 +21,16 @@ TRAILING_DURATION_RE = re.compile(
 TRAILING_COUNTER_RE = re.compile(r"(?:\s+\d+)+\s*$")
 TRAILING_PUNCT_RE = re.compile(r"^[\s\-–—:;,.!?()\[\]{}]+|[\s\-–—:;,.!?()\[\]{}]+$")
 RAW_LABEL_WORD_RE = re.compile(r"[a-z]{2,}")
-COMPANY_NOISE_TOKENS = {"ab", "hb", "stadservice", "stadtjanst", "stadning"}
+COMPANY_NOISE_TOKENS = {
+    "ab",
+    "hb",
+    "stadservice",
+    "städservice",
+    "stadtjanst",
+    "städtjanst",
+    "stadning",
+    "städning",
+}
 JOB_TYPE_HINT_TOKENS = {
     "lunch",
     "restid",
@@ -49,6 +58,7 @@ JOB_TYPE_HINT_TOKENS = {
     "vard",
     "barn",
     "tjanstledig",
+    "sjukdom",
     "clickandgo",
 }
 
@@ -78,11 +88,13 @@ ACTIVITY_LABEL_OVERRIDES = {
     "thank you for today": "Thank You For Today",
     "thank you for today!": "Thank You For Today",
     "inter tid": "Inter Tid",
-    "personalmote": "Personalmote",
-    "vard av barn": "Vard Av Barn",
-    "tjanstledig del av dag": "Tjanstledig Del Av Dag",
+    "personalmote": "Personalmöte",
+    "vard av barn": "Vård Av Barn",
+    "tjanstledig del av dag": "Tjänstledig Del Av Dag",
+    "sjukdom dag 1-14": "Sjukdom Dag 1-14",
+    "sjukdom dag 1 14": "Sjukdom Dag 1-14",
     "nyckelhantering": "Nyckelhantering",
-    "forberedelser till iss": "Forberedelser Till Iss",
+    "forberedelser till iss": "Förberedelser Till Iss",
     "ej disponibel": "Ej Disponibel",
     "avbokade uppdrag": "Avbokade Uppdrag",
     "avokade uppdrag": "Avbokade Uppdrag",
@@ -90,30 +102,38 @@ ACTIVITY_LABEL_OVERRIDES = {
 
 KNOWN_TYPE_LABEL_PATTERNS: tuple[tuple[str, str], ...] = (
     ("utbildning handledarhus", "Utbildning Handledarhus"),
-    ("forberedelser till iss", "Forberedelser Till Iss"),
+    ("forberedelser till iss", "Förberedelser Till Iss"),
     ("avbokade uppdrag", "Avbokade Uppdrag"),
     ("avokade uppdrag", "Avbokade Uppdrag"),
-    ("tjanstledig del av dag", "Tjanstledig Del Av Dag"),
+    ("tjanstledig del av dag", "Tjänstledig Del Av Dag"),
+    ("sjukdom dag 1-14", "Sjukdom Dag 1-14"),
+    ("sjukdom dag 1 14", "Sjukdom Dag 1-14"),
     ("ej disponibel", "Ej Disponibel"),
-    ("extra stadtillfalle", "Extra Stadtillfalle"),
-    ("inledande storstadning", "Inledande Storstadning"),
-    ("reklamation omstadning", "Reklamation Omstadning"),
-    ("kylskapsrengoring", "Kylskapsrengoring"),
-    ("ugnsrengoring", "Ugnsrengoring"),
+    ("extra stadtillfalle", "Extra Städtillfälle"),
+    ("inledande storstadning", "Inledande Storstädning"),
+    ("reklamation omstadning", "Reklamation Omstädning"),
+    ("kylskapsrengoring", "Kylskåpsrengöring"),
+    ("ugnsrengoring", "Ugnsrengöring"),
     ("nyckelhantering", "Nyckelhantering"),
-    ("personalmote", "Personalmote"),
+    ("personalmote", "Personalmöte"),
     ("thank you for today", "Thank You For Today"),
     ("inter tid", "Inter Tid"),
-    ("vard av barn", "Vard Av Barn"),
+    ("vard av barn", "Vård Av Barn"),
     ("clickandgo", "ClickAndGo"),
-    ("storstadning", "Storstadning"),
-    ("stadservice", "Stadservice"),
+    ("storstadning", "Storstädning"),
+    ("stadservice", "Städservice"),
     ("reklamation", "Reklamation"),
-    ("fonsterputs", "Fonsterputs"),
+    ("fonsterputs", "Fönsterputs"),
     ("utbildning", "Utbildning"),
     ("restid", "Restid"),
     ("lunch", "Lunch"),
 )
+
+PLACE_LABEL_OVERRIDES = {
+    "kallered": "Kållered",
+    "molndal": "Mölndal",
+    "goteborg": "Göteborg",
+}
 
 NON_WORK_ACTIVITY_TYPES = {
     SHIFT_TYPE_BREAK,
@@ -316,8 +336,12 @@ def _extract_customer_name(
     if not raw_type_label:
         return candidate
     combined_hint_label = _normalize_type_label(" ".join(token for token in (customer_title, job_type_hint) if token))
-    combined_hint_type = _classify_from_normalized_label(_normalize_text(combined_hint_label).lower()) if combined_hint_label else SHIFT_TYPE_UNKNOWN
-    has_customer_hint = bool(_normalize_text(customer_title)) and bool(_normalize_text(job_type_hint))
+    combined_hint_type = (
+        _classify_from_normalized_label(_normalize_match_text(combined_hint_label).lower())
+        if combined_hint_label
+        else SHIFT_TYPE_UNKNOWN
+    )
+    has_customer_hint = bool(_normalize_match_text(customer_title)) and bool(_normalize_match_text(job_type_hint))
     has_location_context = bool(
         address.street
         or address.street_number
@@ -338,16 +362,16 @@ def _extract_customer_name(
 
 
 def _classify_shift(entry: Entry, address: AddressParts, *, raw_type_label: str) -> str:
-    normalized_raw = _normalize_text(raw_type_label).lower()
+    normalized_raw = _normalize_match_text(raw_type_label).lower()
     classified_raw = _classify_from_normalized_label(normalized_raw)
     if classified_raw != SHIFT_TYPE_UNKNOWN:
         return classified_raw
 
     combined = " ".join(
         [
-            _normalize_text(entry.title).lower(),
-            _normalize_text(entry.address).lower(),
-            _normalize_text(entry.location).lower(),
+            _normalize_match_text(entry.title).lower(),
+            _normalize_match_text(entry.address).lower(),
+            _normalize_match_text(entry.location).lower(),
         ]
     )
     classified_combined = _classify_from_normalized_label(combined)
@@ -370,7 +394,7 @@ def _classify_from_normalized_label(value: str) -> str:
         return SHIFT_TYPE_MEETING
     if any(token in value for token in ("nyckelhantering", "forberedelser till iss")):
         return SHIFT_TYPE_ADMIN
-    if any(token in value for token in ("vard av barn", "tjanstledig del av dag", "tjanstledig")):
+    if any(token in value for token in ("vard av barn", "tjanstledig del av dag", "tjanstledig", "sjukdom dag 1-14", "sjukdom")):
         return SHIFT_TYPE_LEAVE
     if any(token in value for token in ("ej disponibel", "avbokade uppdrag", "avokade uppdrag")):
         return SHIFT_TYPE_UNAVAILABLE
@@ -415,7 +439,7 @@ def _split_title_components(value: str) -> tuple[str, str]:
     for index, token in enumerate(tokens):
         if index == 0:
             continue
-        normalized = _normalize_text(token).lower()
+        normalized = _normalize_match_text(token).lower()
         if normalized in JOB_TYPE_HINT_TOKENS:
             return _collapse_whitespace(" ".join(tokens[:index])), _collapse_whitespace(" ".join(tokens[index:]))
     return without_duration, ""
@@ -424,7 +448,7 @@ def _split_title_components(value: str) -> tuple[str, str]:
 def _extract_raw_type_label(entry: Entry, *, customer_title: str, job_type_hint: str) -> str:
     combined_hint = _normalize_type_label(" ".join(token for token in (customer_title, job_type_hint) if token))
     if combined_hint:
-        combined_normalized = _normalize_text(combined_hint).lower()
+        combined_normalized = _normalize_match_text(combined_hint).lower()
         combined_classification = _classify_from_normalized_label(combined_normalized)
         if combined_normalized in ACTIVITY_LABEL_OVERRIDES:
             return ACTIVITY_LABEL_OVERRIDES[combined_normalized]
@@ -443,7 +467,7 @@ def _extract_raw_type_label(entry: Entry, *, customer_title: str, job_type_hint:
             return address_candidate
         return _extract_label_from_context_text(entry.location)
 
-    normalized = _normalize_text(title_candidate).lower()
+    normalized = _normalize_match_text(title_candidate).lower()
     if normalized in ACTIVITY_LABEL_OVERRIDES:
         return ACTIVITY_LABEL_OVERRIDES[normalized]
     if _classify_from_normalized_label(normalized) != SHIFT_TYPE_UNKNOWN:
@@ -475,12 +499,12 @@ def _canonicalize_type_label(value: str) -> str:
     cleaned = _normalize_type_label(value)
     if not cleaned:
         return ""
-    canonical = _canonical_known_label(_normalize_text(cleaned).lower())
+    canonical = _canonical_known_label(_normalize_match_text(cleaned).lower())
     return canonical or cleaned
 
 
 def _extract_label_from_context_text(value: str) -> str:
-    normalized = _normalize_text(value).lower()
+    normalized = _normalize_match_text(value).lower()
     if not normalized:
         return ""
     return _canonical_known_label(normalized)
@@ -501,7 +525,7 @@ def _canonical_known_label(normalized: str) -> str:
 
 
 def _is_usable_raw_type_label(value: str) -> bool:
-    normalized = _normalize_text(value).lower()
+    normalized = _normalize_match_text(value).lower()
     if not normalized:
         return False
     if normalized in ACTIVITY_LABEL_OVERRIDES:
@@ -550,11 +574,21 @@ def _strip_trailing_duration(value: str) -> str:
 def _strip_inline_type_noise_tokens(value: str) -> str:
     if not value:
         return ""
+    preserved_ranges: dict[str, str] = {}
+
+    def preserve_range(match: re.Match[str]) -> str:
+        key = f"__RANGE_{len(preserved_ranges)}__"
+        preserved_ranges[key] = _collapse_whitespace(match.group(0))
+        return key
+
+    protected = re.sub(r"\b\d+\s*-\s*\d+\b", preserve_range, value)
     # OCR may inject counters/durations in the middle of wrapped type labels:
     # e.g. "Reklamation 1 3h omstadning" -> "Reklamation omstadning".
-    stripped = re.sub(r"\b\d+\s*h(?:\s*\d+\s*m)?\b", " ", value, flags=re.IGNORECASE)
+    stripped = re.sub(r"\b\d+\s*h(?:\s*\d+\s*m)?\b", " ", protected, flags=re.IGNORECASE)
     stripped = re.sub(r"\b\d+\s*m(?:in)?\b", " ", stripped, flags=re.IGNORECASE)
     stripped = re.sub(r"\b\d+\b", " ", stripped)
+    for key, original in preserved_ranges.items():
+        stripped = stripped.replace(key, original)
     return _collapse_whitespace(stripped)
 
 
@@ -563,7 +597,11 @@ def _normalize_street(value: str) -> str:
 
 
 def _normalize_place(value: str) -> str:
-    return _to_title_case(_normalize_text(value))
+    normalized = _to_title_case(_normalize_text(value))
+    if not normalized:
+        return ""
+    key = _normalize_match_text(normalized).lower()
+    return PLACE_LABEL_OVERRIDES.get(key, normalized)
 
 
 def _normalize_street_number(value: str) -> str:
@@ -597,16 +635,21 @@ def _last_number_index(tokens: list[str]) -> int | None:
     return None
 
 
-def _normalize_text(value: str) -> str:
+def _normalize_text(value: str, *, strip_accents: bool = False) -> str:
     collapsed = _collapse_whitespace(value)
     if not collapsed:
         return ""
 
     fixed = collapsed.replace("|", "l").replace("I", "i")
     fixed = _replace_ocr_digit_confusions(fixed)
-    stripped = _strip_accents(fixed)
-    alnum = re.sub(r"[^A-Za-z0-9\s\-']", " ", stripped)
-    return _collapse_whitespace(alnum)
+    if strip_accents:
+        fixed = _strip_accents(fixed)
+    sanitized = _sanitize_text_characters(fixed)
+    return _collapse_whitespace(sanitized)
+
+
+def _normalize_match_text(value: str) -> str:
+    return _normalize_text(value, strip_accents=True)
 
 
 def _replace_ocr_digit_confusions(value: str) -> str:
@@ -624,6 +667,17 @@ def _replace_ocr_digit_confusions(value: str) -> str:
 def _strip_accents(value: str) -> str:
     normalized = unicodedata.normalize("NFKD", value)
     return "".join(char for char in normalized if not unicodedata.combining(char))
+
+
+def _sanitize_text_characters(value: str) -> str:
+    normalized = unicodedata.normalize("NFKC", value)
+    chars: list[str] = []
+    for char in normalized:
+        if char.isalnum() or char in {" ", "-", "'"}:
+            chars.append(char)
+        else:
+            chars.append(" ")
+    return "".join(chars)
 
 
 def _to_title_case(value: str) -> str:
