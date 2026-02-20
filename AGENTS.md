@@ -205,6 +205,7 @@ If the date cannot be resolved or is inconsistent:
   - supports stacked two-line time ranges (`start` on one line, `end` on next) by consolidating single-time markers in the same left time column, including cases where status/noise lines exist between them
   - when stacked ranges include type text on the end-time line (e.g., `11:45 ClickAndGo`), parser appends that type fragment into the preserved title for the merged interval
   - strips UI-noise tokens (e.g., collaborator/status/duration lines such as `Collaborators`, `On time`, `4h`) before title/address/location assignment
+  - when OCR merges address text with trailing collaborator metadata on the same line, parser trims the collaborator suffix and preserves the address portion
   - when OCR pushes job/activity type to a separate trailing line, parser preserves and folds recognized type labels back into title (instead of dropping as metadata), including numeric/duration noise wrappers (e.g., `1`, `4h`)
   - prunes far-right trailing metadata chips inside cards (e.g., collaborator counters/icons) using geometry so address/location assignment stays stable under OCR text noise
   - drops single-time cards without address/location as UI chrome/footer artifacts (e.g., status-bar clock or end-of-day thank-you rows)
@@ -224,6 +225,7 @@ If the date cannot be resolved or is inconsistent:
   - address decomposition into `street`, `street_number`, `postal_code`, `postal_area`, `city`
   - customer/title cleanup with whitespace collapse, casing normalization, and company-noise token removal
   - preserves OCR diacritics in human-facing payload fields (`customer_name`, address components) while keeping accent-insensitive matching for classification and fingerprints
+  - customer-name cleanup removes isolated numeric separator artifacts between alphabetic name tokens (e.g., `Maryann 1 Sarisson` -> `Maryann Sarisson`)
   - title-row parsing supports `client • job_type duration` pattern:
     - customer name is extracted from the segment before `•`
     - trailing durations (e.g., `4h`, `2h 30m`) are stripped from customer/job hints
